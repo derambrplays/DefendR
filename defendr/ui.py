@@ -51,15 +51,81 @@ class ScanWorker(QtCore.QThread):
 
 class SplashScreen(QtWidgets.QSplashScreen):
     def __init__(self):
-        icon_path = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
-        pixmap = QtGui.QPixmap(icon_path) if os.path.exists(icon_path) else QtGui.QPixmap(256, 256)
-        if not os.path.exists(icon_path):
-            pixmap.fill(QtGui.QColor(DARK_BG))
+        self._icon_path = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
+        pixmap = QtGui.QPixmap(500, 300)
+        pixmap.fill(QtGui.QColor(DARK_BG))
         super().__init__(pixmap)
-        self.setStyleSheet(f"color: {TEXT}; background: transparent;")
+        self.setStyleSheet("background: transparent;")
         self.show()
-        self.showMessage(_("app_title"), QtCore.Qt.AlignBottom | QtCore.Qt.AlignCenter,
-                         QtGui.QColor(ACCENT_LIGHT))
+
+    def draw(self, message, progress=0):
+        pix = QtGui.QPixmap(500, 300)
+        pix.fill(QtGui.QColor(DARK_BG))
+        p = QtGui.QPainter(pix)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        icon = QtGui.QPixmap(self._icon_path) if os.path.exists(self._icon_path) else None
+        if icon and not icon.isNull():
+            p.drawPixmap(200, 30, 100, 100, icon.scaled(100, 100, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        p.setPen(QtGui.QColor(ACCENT_LIGHT))
+        fnt = QtGui.QFont("Consolas", 16, QtGui.QFont.Bold)
+        p.setFont(fnt)
+        p.drawText(QtCore.QRect(0, 140, 500, 40), QtCore.Qt.AlignCenter, "DefendR")
+        fnt2 = QtGui.QFont("Consolas", 9)
+        p.setFont(fnt2)
+        p.setPen(QtGui.QColor(TEXT))
+        p.drawText(QtCore.QRect(20, 180, 460, 50), QtCore.Qt.AlignCenter | QtCore.Qt.TextWordWrap, message)
+        bar_x, bar_y, bar_w, bar_h = 50, 240, 400, 16
+        p.setPen(QtCore.Qt.NoPen)
+        p.setBrush(QtGui.QColor(DARK_CARD))
+        p.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 8, 8)
+        if progress > 0:
+            p.setBrush(QtGui.QColor(ACCENT))
+            p.drawRoundedRect(bar_x, bar_y, int(bar_w * progress / 100), bar_h, 8, 8)
+        p.end()
+        self.setPixmap(pix)
+        self.repaint()
+
+class SidebarButton(QtWidgets.QPushButton):
+    def __init__(self, text, icon_emoji=""):
+        super().__init__(f"  {icon_emoji}  {text}")
+        self.setCheckable(True)
+        self.setFixedHeight(42)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT}; border: none;
+                text-align: left; padding: 8px 16px; font-size: 12px;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background: {DARK_MID}; color: {ACCENT_LIGHT};
+            }}
+            QPushButton:checked {{
+                background: {ACCENT}; color: white; font-weight: bold;
+            }}
+        """)
+
+class StatCard(QtWidgets.QFrame):
+    def __init__(self, label, icon, color):
+        super().__init__()
+        self.setStyleSheet(f"background: {DARK_CARD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 8px;")
+        self.setMinimumSize(140, 80)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(2)
+        self.icon_lbl = QtWidgets.QLabel(icon)
+        self.icon_lbl.setStyleSheet(f"font-size: 20px; background: transparent;")
+        self.icon_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(self.icon_lbl)
+        self.value_lbl = QtWidgets.QLabel("0")
+        self.value_lbl.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {color}; background: transparent;")
+        self.value_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(self.value_lbl)
+        self.title_lbl = QtWidgets.QLabel(label)
+        self.title_lbl.setStyleSheet(f"font-size: 10px; color: {TEXT_DIM}; background: transparent;")
+        self.title_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(self.title_lbl)
+    def set_value(self, val):
+        self.value_lbl.setText(str(val))
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
