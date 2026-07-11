@@ -810,7 +810,7 @@ def main():
             import importlib
             importlib.invalidate_caches()
             try:
-                from PyQt5 import QtWidgets, QtCore, QtGui
+                import PyQt5
                 HAS_PYQT = True
             except Exception as e:
                 print(f"Erro ao carregar PyQt5: {e}")
@@ -821,6 +821,7 @@ def main():
             if r.stderr:
                 print(f"Erro: {r.stderr}")
             sys.exit(1)
+    from PyQt5 import QtWidgets, QtCore, QtGui
     app = QtWidgets.QApplication(sys.argv)
     wizard = InstallWizard()
     if wizard.exec_() == QtWidgets.QDialog.Accepted:
