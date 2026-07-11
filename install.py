@@ -6,7 +6,7 @@ import os, sys, subprocess, shutil
 LANG = {}
 ICON_SRC = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
 DEFENDR_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFENDR_SCRIPT = os.path.join(DEFENDR_DIR, "defendr")
+DEFENDR_SCRIPT = os.path.join(DEFENDR_DIR, "defendr.py")
 SPLASH_PATH = os.path.join(DEFENDR_DIR, "defendr", "splash.png")
 
 LANGS = {
@@ -506,7 +506,7 @@ class FilesPage(QtWidgets.QWizardPage):
             if f.startswith(".") or f == "__pycache__":
                 continue
             is_dir = os.path.isdir(fp)
-            is_exec = f == "defendr" or f == "run.sh"
+            is_exec = f == "defendr.py" or f == "run.sh"
             is_installer = f == "install.py"
             name = f + "/" if is_dir else f
             if is_exec:
