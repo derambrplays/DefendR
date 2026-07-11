@@ -800,9 +800,27 @@ class DonePage(QtWidgets.QWizardPage):
         self.wiz.setButtonText(QtWidgets.QWizard.FinishButton, _("finish"))
 
 def main():
+    global HAS_PYQT
     if not HAS_PYQT:
-        print("PyQt5 is required. Install: sudo apt install python3-pyqt5")
-        sys.exit(1)
+        print("PyQt5 nao encontrado. Tentando instalar automaticamente...")
+        r = subprocess.run(["sudo", "apt", "install", "-y", "python3-pyqt5"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            print("PyQt5 instalado com sucesso!")
+            import importlib
+            importlib.invalidate_caches()
+            try:
+                from PyQt5 import QtWidgets, QtCore, QtGui
+                HAS_PYQT = True
+            except Exception as e:
+                print(f"Erro ao carregar PyQt5: {e}")
+                sys.exit(1)
+        else:
+            print("Falha ao instalar PyQt5. Instale manualmente:")
+            print("  sudo apt install python3-pyqt5")
+            if r.stderr:
+                print(f"Erro: {r.stderr}")
+            sys.exit(1)
     app = QtWidgets.QApplication(sys.argv)
     wizard = InstallWizard()
     if wizard.exec_() == QtWidgets.QDialog.Accepted:
