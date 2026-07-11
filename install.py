@@ -750,13 +750,13 @@ StartupNotify=true
             self.progress.setValue(85)
             QtWidgets.QApplication.processEvents()
 
+            os.makedirs(os.path.expanduser("~/.defendr"), exist_ok=True)
+            with open(os.path.expanduser("~/.defendr/installed"), "w") as f:
+                f.write(f"lang={self.wiz.lang_code}\nsudo={self.wiz.use_sudo}\n")
             self.log.append("  ✓ Instalação concluída")
             self.progress.setValue(100)
             self.status.setText(_("done_desc"))
             self.installed = True
-            os.makedirs(os.path.expanduser("~/.defendr"), exist_ok=True)
-            with open(os.path.expanduser("~/.defendr/installed"), "w") as f:
-                f.write(f"lang={self.wiz.lang_code}\nsudo={self.wiz.use_sudo}\n")
         except Exception as e:
             self.log.append(f"  ✗ Erro: {e}")
             self.installed = False
