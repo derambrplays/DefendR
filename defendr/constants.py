@@ -53,16 +53,62 @@ PENTEST_WHITELIST = frozenset({
     "powershell -exec bypass", "powershell -enc",
 })
 
-MALICIOUS_SIGS = (
+FILE_MAGIC_BYTES = (
     (b"\x4d\x5a\x90\x00", "PE (Windows executable)"),
     (b"\x7f\x45\x4c\x46", "ELF (Linux executable)"),
     (b"\x50\x4b\x03\x04", "ZIP/OLE2 container"),
     (b"\x1f\x8b\x08", "GZip compressed"),
-    (b"\x89\x50\x4e\x47", "PNG image (possible stego)"),
+    (b"\x89\x50\x4e\x47", "PNG image"),
+    (b"\x25\x50\x44\x46", "PDF document"),
+    (b"\xd0\xcf\x11\xe0", "OLE2 compound document"),
+    (b"\xca\xfe\xba\xbe", "Java class file"),
+    (b"\xef\xbb\xbf", "UTF-8 BOM text"),
 )
 SUSPICIOUS_EXTS = frozenset({".exe", ".dll", ".scr", ".ps1", ".vbs", ".vbe",
                     ".js", ".jse", ".wsf", ".hta", ".bat",
                     ".cmd", ".com", ".pif", ".jar", ".docm", ".xlsm"})
+
+# Real malware YARA-like patterns (not just file types)
+MALWARE_PATTERNS = (
+    (b"CreateRemoteThread", "Process injection (CreateRemoteThread)"),
+    (b"VirtualAllocEx", "Memory allocation (VirtualAllocEx)"),
+    (b"WriteProcessMemory", "Process injection (WriteProcessMemory)"),
+    (b"QueueUserAPC", "APC injection technique"),
+    (b"SetWindowsHookEx", "Keylogging via hook"),
+    (b"NtUnmapViewOfSection", "Process hollowing"),
+    (b"ReflectiveLoader", "Reflective DLL injection"),
+    (b"Metasploit", "Metasploit payload"),
+    (b"meterpreter", "Meterpreter payload"),
+    (b"shellcode", "Embedded shellcode"),
+    (b"Msfvenom", "Msfvenom generated payload"),
+    (b"cobaltstrike", "Cobalt Strike beacon"),
+    (b"beacon.dll", "C2 beacon DLL"),
+    (b"mimikatz", "Mimikatz credential dumper"),
+    (b"Invoke-Mimikatz", "PowerShell Mimikatz"),
+    (b"Invoke-", "PowerShell offensive script"),
+    (b"DownloadString", "PowerShell remote download"),
+    (b"DownloadFile", "File download via script"),
+    (b"Start-Process -Hidden", "Hidden process execution"),
+    (b"WScript.Shell", "Windows Script Host execution"),
+    (b"FileSystemObject", "File system access via script"),
+    (b"amsi", "AMSI bypass attempt"),
+    (b"AMSI", "AMSI bypass attempt"),
+    (b"bypass", "Potential bypass technique"),
+    (b"powershell -enc", "Encoded PowerShell command"),
+    (b"powershell -e ", "Encoded PowerShell command"),
+    (b"base64", "Base64 encoded content"),
+    (b"FromBase64", "Base64 decoding"),
+    (b"cmd.exe /c", "Command execution via cmd"),
+)
+
+# System paths exempt from heavy scanning to reduce noise
+SYSTEM_PATHS = frozenset({
+    "/usr/lib", "/usr/share", "/usr/include", "/usr/src",
+    "/usr/bin", "/usr/sbin", "/opt", "/snap",
+    "/var/lib", "/var/cache", "/var/log",
+    "/lib", "/lib64", "/lib32",
+    "/sys", "/proc", "/dev", "/run",
+})
 SUSPICIOUS_STRINGS = (
     b"CreateRemoteThread", b"VirtualAllocEx",
     b"WriteProcessMemory", b"GetProcAddress",

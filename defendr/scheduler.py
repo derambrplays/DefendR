@@ -67,14 +67,15 @@ class SignatureUpdater(QtCore.QObject):
             with urllib.request.urlopen(req, timeout=10) as r:
                 data = json.loads(r.read().decode())
             safe_json_write(self.sig_file, data)
-            new_sigs = data.get("malicious_sigs", [])
+            new_sigs = data.get("malware_patterns", [])
             new_whitelist = data.get("whitelist", [])
             n = 0
             for sig_bytes, desc in new_sigs:
                 sig = bytes.fromhex(sig_bytes) if isinstance(sig_bytes, str) else bytes(sig_bytes)
-                existing_sigs = {s[0] for s in MALICIOUS_SIGS}
-                if sig not in existing_sigs:
-                    self.engine.malicious_sigs.append((sig, desc))
+                existing_hardcoded = {s[0] for s in self.engine.malware_patterns}
+                existing_remote = {s[0] for s in self.engine._remote_patterns}
+                if sig not in existing_hardcoded and sig not in existing_remote:
+                    self.engine._remote_patterns.append((sig, desc))
                     n += 1
             for w in new_whitelist:
                 if w not in self.engine.whitelist:
@@ -86,4 +87,6 @@ class SignatureUpdater(QtCore.QObject):
             self.update_signal.emit(f"Update failed: {str(e)[:50]}")
             return 0
     def get_signature_count(self):
-        return len(self.engine.malicious_sigs) + len(self.engine.suspicious_strings) + len(self.engine.whitelist)
+        return (len(self.engine.malware_patterns) + len(self.engine._remote_patterns)
+                + len(self.engine._clamav_patterns)
+                + len(self.engine.suspicious_strings) + len(self.engine.whitelist))

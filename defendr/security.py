@@ -6,11 +6,31 @@ from defendr.constants import *
 
 class FirewallManager(QtCore.QObject):
     status_signal = QtCore.pyqtSignal(str)
+    intrusion_signal = QtCore.pyqtSignal(str, str)
     def __init__(self):
         super().__init__()
         self.enabled = False
         self.rules = []
+        self._scan_attempts = {}
         self._check_iptables()
+        if self.iptables_ok:
+            self._protect_server_port()
+    def _protect_server_port(self):
+        try:
+            subprocess.run(["iptables", "-C", "INPUT", "-p", "tcp", "--dport", "5000",
+                           "-m", "state", "--state", "NEW", "-m", "recent", "--set",
+                           "--name", "DEFENDR", "--rsource"], check=False, timeout=5,
+                           capture_output=True)
+            subprocess.run(["iptables", "-A", "INPUT", "-p", "tcp", "--dport", "5000",
+                           "-m", "state", "--state", "NEW", "-m", "recent", "--update",
+                           "--seconds", "60", "--hitcount", "10", "--name", "DEFENDR",
+                           "--rttl", "-j", "DROP"], check=False, timeout=5,
+                           capture_output=True)
+            subprocess.run(["iptables", "-A", "INPUT", "-p", "tcp", "--dport", "5000",
+                           "-s", "127.0.0.1", "-j", "ACCEPT"], check=False, timeout=5,
+                           capture_output=True)
+        except Exception:
+            pass
     def _check_iptables(self):
         try:
             r = subprocess.run(["iptables","-L","-n"], capture_output=True, text=True, encoding="utf-8", errors="surrogateescape", timeout=5)
@@ -59,11 +79,12 @@ class FirewallManager(QtCore.QObject):
     def flush(self):
         if not self.iptables_ok: return False, "iptables not available"
         try:
-            subprocess.run(["iptables","-F"], check=False, timeout=5)
-            subprocess.run(["iptables","-P","INPUT","ACCEPT"], check=False, timeout=5)
-            subprocess.run(["iptables","-P","FORWARD","ACCEPT"], check=False, timeout=5)
-            subprocess.run(["iptables","-P","OUTPUT","ACCEPT"], check=False, timeout=5)
+            subprocess.run(["iptables", "-F"], check=False, timeout=5)
+            subprocess.run(["iptables", "-P", "INPUT", "ACCEPT"], check=False, timeout=5)
+            subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], check=False, timeout=5)
+            subprocess.run(["iptables", "-P", "OUTPUT", "ACCEPT"], check=False, timeout=5)
             self.rules = []; self.enabled = False
+            self._protect_server_port()
             self.status_signal.emit("All firewall rules flushed")
             return True, "Rules flushed"
         except Exception as e: return False, str(e)
@@ -73,6 +94,37 @@ class FirewallManager(QtCore.QObject):
             r = subprocess.run(["iptables","-L","-n","--line-numbers"], capture_output=True, text=True, encoding="utf-8", errors="surrogateescape", timeout=5)
             return r.stdout.split("\n") if r.returncode == 0 else []
         except Exception: return []
+
+    def detect_port_scan(self):
+        try:
+            r = subprocess.run(["iptables", "-L", "INPUT", "-n", "-v"],
+                               capture_output=True, text=True, timeout=5,
+                               encoding="utf-8", errors="surrogateescape")
+            for line in r.stdout.split("\n"):
+                if "DPT=5000" in line and "DROP" in line:
+                    parts = line.strip().split()
+                    if parts and parts[0].isdigit() and int(parts[0]) > 50:
+                        self.intrusion_signal.emit("HIGH", f"Port scan detected on port 5000: {parts[0]} dropped packets")
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def detect_brute_force(self):
+        try:
+            r = subprocess.run(["journalctl", "-u", "defendr", "--since", "5 min ago", "-n", "50",
+                               "--no-pager"], capture_output=True, text=True, timeout=5,
+                               encoding="utf-8", errors="surrogateescape")
+            login_attempts = 0
+            for line in r.stdout.split("\n"):
+                if "login" in line.lower() and ("fail" in line.lower() or "invalid" in line.lower()):
+                    login_attempts += 1
+            if login_attempts > 10:
+                self.intrusion_signal.emit("MEDIUM", f"Possible brute force: {login_attempts} failed logins in 5 min")
+                return True
+        except Exception:
+            pass
+        return False
 
 class WebBlocker:
     def __init__(self):

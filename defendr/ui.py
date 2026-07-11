@@ -38,14 +38,18 @@ class ScanWorker(QtCore.QThread):
     progress = QtCore.pyqtSignal(int, str)
     error = QtCore.pyqtSignal(str)
 
-    def __init__(self, engine, path):
+    def __init__(self, engine, path, mode="rapido"):
         super().__init__()
         self.engine = engine
         self.path = path
+        self.mode = mode
 
     def run(self):
         try:
-            result = self.engine.scan_path(self.path)
+            if self.mode == "completo":
+                result = self.engine.scan_completo(self.path)
+            else:
+                result = self.engine.scan_rapido(self.path)
             self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
@@ -1141,6 +1145,45 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_hd_scan(self):
         w, layout = self._page_widget()
         self._page_header(layout, _("💿  HD Scanner"), _("Scan your drives and get security recommendations"))
+
+        mode_frame = QtWidgets.QFrame()
+        mode_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 16px; padding: 10px;")
+        mode_l = QtWidgets.QHBoxLayout(mode_frame)
+        mode_l.setContentsMargins(20, 10, 20, 10)
+        self.hd_mode = "rapido"
+        self.hd_rapido_btn = QtWidgets.QPushButton(_("Rápido"))
+        self.hd_completo_btn = QtWidgets.QPushButton(_("Completo"))
+        for btn in (self.hd_rapido_btn, self.hd_completo_btn):
+            btn.setCursor(QtCore.Qt.PointingHandCursor)
+            btn.setFixedHeight(42)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: rgba(44,44,46,0.6);
+                    color: {TEXT_DIM};
+                    border: 2px solid transparent;
+                    border-radius: 10px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    padding: 0 24px;
+                }}
+                QPushButton:hover {{
+                    color: {TEXT};
+                    border-color: {ACCENT};
+                }}
+            """)
+        self.hd_rapido_btn.setStyleSheet(self.hd_rapido_btn.styleSheet() + f"""
+            QPushButton {{
+                background: {ACCENT};
+                color: white;
+                border-color: {ACCENT_LIGHT};
+            }}
+        """)
+        self.hd_rapido_btn.clicked.connect(lambda: self._hd_set_mode("rapido"))
+        self.hd_completo_btn.clicked.connect(lambda: self._hd_set_mode("completo"))
+        mode_l.addWidget(self.hd_rapido_btn)
+        mode_l.addWidget(self.hd_completo_btn)
+        layout.addWidget(mode_frame)
+
         ball_frame = QtWidgets.QFrame()
         ball_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 16px;")
         ball_l = QtWidgets.QVBoxLayout(ball_frame)
@@ -1211,6 +1254,42 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(hd_tabs, 1)
         self.content_stack.addWidget(w)
 
+    def _hd_set_mode(self, mode):
+        self.hd_mode = mode
+        rapido_style = f"""
+            QPushButton {{
+                background: {ACCENT} if mode == "rapido" else "rgba(44,44,46,0.6)";
+                color: white if mode == "rapido" else {TEXT_DIM};
+                border: 2px solid {'transparent' if mode != "rapido" else ACCENT_LIGHT};
+            }}
+        """
+        completo_style = f"""
+            QPushButton {{
+                background: {ACCENT} if mode == "completo" else "rgba(44,44,46,0.6)";
+                color: white if mode == "completo" else {TEXT_DIM};
+                border: 2px solid {'transparent' if mode != "completo" else ACCENT_LIGHT};
+            }}
+        """
+        self.hd_rapido_btn.setStyleSheet(self.hd_rapido_btn.styleSheet())
+        if mode == "rapido":
+            self.hd_rapido_btn.setStyleSheet(f"""
+                QPushButton {{ background: {ACCENT}; color: white; border: 2px solid {ACCENT_LIGHT}; border-radius: 10px; font-size: 14px; font-weight: 600; padding: 0 24px; height: 42px; }}
+                QPushButton:hover {{ border-color: white; }}
+            """)
+            self.hd_completo_btn.setStyleSheet(f"""
+                QPushButton {{ background: rgba(44,44,46,0.6); color: {TEXT_DIM}; border: 2px solid transparent; border-radius: 10px; font-size: 14px; font-weight: 600; padding: 0 24px; height: 42px; }}
+                QPushButton:hover {{ color: {TEXT}; border-color: {ACCENT}; }}
+            """)
+        else:
+            self.hd_rapido_btn.setStyleSheet(f"""
+                QPushButton {{ background: rgba(44,44,46,0.6); color: {TEXT_DIM}; border: 2px solid transparent; border-radius: 10px; font-size: 14px; font-weight: 600; padding: 0 24px; height: 42px; }}
+                QPushButton:hover {{ color: {TEXT}; border-color: {ACCENT}; }}
+            """)
+            self.hd_completo_btn.setStyleSheet(f"""
+                QPushButton {{ background: {ACCENT}; color: white; border: 2px solid {ACCENT_LIGHT}; border-radius: 10px; font-size: 14px; font-weight: 600; padding: 0 24px; height: 42px; }}
+                QPushButton:hover {{ border-color: white; }}
+            """)
+
     def _hd_start_scan(self):
         self.hd_results_tree.clear()
         self.hd_recs_list.clear()
@@ -1218,8 +1297,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hd_progress.show()
         self.hd_ball_btn.setText("⏳")
         self.hd_ball_btn.setEnabled(False)
-        self.hd_status.setText(_("Scanning drives..."))
-        self._hd_worker = ScanWorker(self.engine, "/mnt/defendr")
+        label = _("Quick scan in progress...") if self.hd_mode == "rapido" else _("Full scan in progress...")
+        self.hd_status.setText(label)
+        self._hd_worker = ScanWorker(self.engine, "/mnt/defendr", mode=self.hd_mode)
         self._hd_worker.finished.connect(self._hd_scan_done)
         self._hd_worker.start()
 
@@ -1231,7 +1311,8 @@ class MainWindow(QtWidgets.QMainWindow):
         suspicious = len(results["suspicious"])
         safe = results["safe"]
         total = malicious + suspicious + safe + len(results["pentest"])
-        self.hd_ball_label.setText(_("Scan complete: %d files") % total)
+        mode_label = _("Quick scan") if self.hd_mode == "rapido" else _("Full scan")
+        self.hd_ball_label.setText(_("%s complete: %d files") % (mode_label, total))
         for r in results["malicious"]:
             item = QtWidgets.QTreeWidgetItem([_("MALICIOUS"), r["path"], r["reason"]])
             for i in range(3): item.setForeground(i, QtGui.QColor(RED))
@@ -1271,7 +1352,7 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         if self.telemetry.is_registered():
             self.telemetry.send_scan_result("hd_scan", {
-                "malicious": malicious, "suspicious": suspicious, "safe": safe,
+                "malicious": malicious, "suspicious": suspicious, "safe": safe, "mode": self.hd_mode,
             })
         self._refresh_drives()
 
