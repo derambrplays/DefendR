@@ -1,3 +1,3 @@
 #!/bin/bash
-cd /home/kalleb/DefendR
-python3 defendr.py
+cd "$(dirname "$0")"
+python3 defendr
