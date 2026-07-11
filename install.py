@@ -709,6 +709,10 @@ StartupNotify=true
             desk_path = os.path.expanduser("~/Área de trabalho/defendr.desktop")
             if not os.path.exists(desk_path):
                 desk_path = os.path.expanduser("~/Desktop/defendr.desktop")
+            os.makedirs(os.path.dirname(desk_path), exist_ok=True)
+            with open(desk_path, "w") as f: f.write(desktop_entry)
+            os.chmod(desk_path, 0o755)
+            self.log.append("  ✓ Atalho na Área de Trabalho criado")
             if self.wiz.use_sudo:
                 sudo_entry = f"""[Desktop Entry]
 Name=DefendR (Root)
