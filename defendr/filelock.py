@@ -1,5 +1,5 @@
 # Simple file locking using fcntl.flock (Linux only)
-import fcntl, os, contextlib
+import fcntl, os, json, contextlib
 
 _lock_files = {}
 

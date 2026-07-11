@@ -7,6 +7,7 @@ LANG = {}
 ICON_SRC = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
 DEFENDR_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFENDR_SCRIPT = os.path.join(DEFENDR_DIR, "defendr.py")
+SPLASH_PATH = os.path.join(DEFENDR_DIR, "defendr", "splash.png")
 
 LANGS = {
     "pt": {
@@ -373,18 +374,21 @@ class InstallWizard(QtWidgets.QWizard):
             self.setWindowIcon(QtGui.QIcon(icon_path))
 
         self.setStyleSheet("""
-            QWizard { background: #0a0015; }
-            QWizard QLabel { color: #e0e0e0; font-size: 12px; }
-            QWizard QLabel#title { color: #7c4dff; font-size: 18px; font-weight: bold; }
-            QWizard QLabel#sub { color: #b0b0b0; font-size: 11px; }
-            QWizard QPushButton { background: #3d2b5e; color: #e0e0e0; border: 1px solid #7c4dff; border-radius: 4px; padding: 6px 16px; font-size: 11px; }
-            QWizard QPushButton:hover { background: #7c4dff; }
-            QWizard QRadioButton, QWizard QCheckBox { color: #e0e0e0; font-size: 11px; }
-            QWizard QComboBox { background: #140528; color: #e0e0e0; border: 1px solid #3d2b5e; border-radius: 3px; padding: 4px; }
-            QWizard QProgressBar { background: #140528; border: 1px solid #3d2b5e; border-radius: 4px; height: 16px; text-align: center; }
-            QWizard QProgressBar::chunk { background: #7c4dff; border-radius: 3px; }
-            QWizard QListWidget { background: #140528; color: #e0e0e0; border: 1px solid #3d2b5e; border-radius: 4px; font-size: 11px; }
-            QWizard QTextEdit { background: #140528; color: #e0e0e0; border: 1px solid #3d2b5e; border-radius: 4px; font-size: 11px; }
+            QWizard { background: #1c1c1e; }
+            QWizard QLabel { color: #f5f5f7; font-size: 13px; }
+            QWizard QLabel#title { color: #ffffff; font-size: 22px; font-weight: 700; }
+            QWizard QLabel#sub { color: #8e8e93; font-size: 13px; }
+            QWizard QPushButton { background: #7c4dff; color: white; border: none; border-radius: 20px; padding: 8px 24px; font-size: 13px; font-weight: 600; }
+            QWizard QPushButton:hover { background: #b388ff; }
+            QWizard QPushButton:disabled { background: #3a3a3c; color: #8e8e93; }
+            QWizard QRadioButton, QWizard QCheckBox { color: #f5f5f7; font-size: 13px; }
+            QWizard QComboBox { background: #2c2c2e; color: #f5f5f7; border: 1px solid #3a3a3c; border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+            QWizard QProgressBar { background: #2c2c2e; border: none; border-radius: 8px; height: 8px; text-align: center; }
+            QWizard QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #7c4dff,stop:1 #b388ff); border-radius: 8px; }
+            QWizard QListWidget { background: #242426; color: #f5f5f7; border: 1px solid #3a3a3c; border-radius: 10px; font-size: 12px; }
+            QWizard QTextEdit { background: #242426; color: #f5f5f7; border: 1px solid #3a3a3c; border-radius: 10px; font-size: 12px; padding: 8px; }
+            QWizard QGroupBox { color: #f5f5f7; border: 1px solid #3a3a3c; border-radius: 14px; margin-top: 10px; padding-top: 14px; font-size: 13px; }
+            QWizard QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
         """)
 
         self.setPage(0, LangPage(self))
@@ -414,6 +418,18 @@ class LangPage(QtWidgets.QWizardPage):
         self.setTitle("")
         self.setSubTitle("")
         layout = QtWidgets.QVBoxLayout()
+        layout.setAlignment(QtCore.Qt.AlignCenter)
+        # Splash image
+        splash_lbl = QtWidgets.QLabel()
+        splash_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        if os.path.exists(SPLASH_PATH):
+            pix = QtGui.QPixmap(SPLASH_PATH)
+            pix = pix.scaled(400, 200, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            splash_lbl.setPixmap(pix)
+        else:
+            splash_lbl.setText("⚔")
+            splash_lbl.setStyleSheet("font-size: 48px; color: #b388ff;")
+        layout.addWidget(splash_lbl)
         title = QtWidgets.QLabel(_("welcome"))
         title.setObjectName("title")
         title.setAlignment(QtCore.Qt.AlignCenter)
@@ -673,6 +689,17 @@ class DonePage(QtWidgets.QWizardPage):
         self.wiz = parent
         self.setTitle("")
         layout = QtWidgets.QVBoxLayout()
+        layout.setAlignment(QtCore.Qt.AlignCenter)
+        splash_lbl = QtWidgets.QLabel()
+        splash_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        if os.path.exists(SPLASH_PATH):
+            pix = QtGui.QPixmap(SPLASH_PATH)
+            pix = pix.scaled(300, 150, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            splash_lbl.setPixmap(pix)
+        else:
+            splash_lbl.setText("⚔")
+            splash_lbl.setStyleSheet("font-size: 48px; color: #b388ff;")
+        layout.addWidget(splash_lbl)
         title = QtWidgets.QLabel(_("done_title"))
         title.setObjectName("title")
         title.setAlignment(QtCore.Qt.AlignCenter)

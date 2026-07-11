@@ -2,19 +2,20 @@
 import os
 from pathlib import Path
 
-DARK_BG = "#0a0015"
-DARK_MID = "#1a0a2e"
-DARK_CARD = "#140528"
-BORDER = "#3d2b5e"
-TEXT = "#e0e0e0"
-TEXT_DIM = "#888"
+DARK_BG = "#1c1c1e"
+DARK_MID = "#2c2c2e"
+DARK_CARD = "#242426"
+BORDER = "#3a3a3c"
+TEXT = "#f5f5f7"
+TEXT_DIM = "#8e8e93"
 ACCENT = "#7c4dff"
 ACCENT_LIGHT = "#b388ff"
-ACCENT_DARK = "#6200ea"
-GREEN = "#2ecc71"
-RED = "#e53935"
-YELLOW = "#fdd835"
-CYAN = "#00bfff"
+ACCENT_DARK = "#5600e8"
+GREEN = "#30d158"
+RED = "#ff453a"
+YELLOW = "#ffd60a"
+CYAN = "#64d2ff"
+FONT = "-apple-system, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif"
 
 QUARANTINE_DIR = os.path.expanduser("~/.defendr_quarantine")
 CONFIG_DIR = os.path.expanduser("~/.defendr")

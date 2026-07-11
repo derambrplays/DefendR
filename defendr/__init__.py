@@ -39,29 +39,51 @@ def main():
     app.setFont(font)
 
     splash = SplashScreen()
-    splash.draw(_("DefendR - Advanced Protection"), 10)
+    splash.draw(_("DefendR - Advanced Protection"), 0)
+    app.processEvents()
 
-    window = MainWindow()
-    splash.draw(_("DefendR - Advanced Protection"), 100)
-    splash.finish(window)
-    window.show()
+    splash_steps = [
+        (5, _("Initializing engine...")),
+        (20, _("Loading signatures...")),
+        (40, _("Starting modules...")),
+        (60, _("Configuring firewall...")),
+        (80, _("Preparing interface...")),
+        (95, _("Almost ready...")),
+    ]
+    splash_idx = [0]
 
-    def listen_raise():
-        while True:
-            try:
-                conn, addr = lock_sock.accept()
-                data = conn.recv(1024)
-                if data == b"raise":
-                    window.raise_(); window.activateWindow(); window.show(); window.tray.show()
-                conn.close()
-            except Exception: break
-    threading.Thread(target=listen_raise, daemon=True).start()
+    def advance_splash():
+        if splash_idx[0] < len(splash_steps):
+            pct, msg = splash_steps[splash_idx[0]]
+            splash.draw(msg, pct)
+            splash_idx[0] += 1
+        else:
+            timer.stop()
+            window = MainWindow()
+            splash.draw(_("DefendR - Advanced Protection"), 100)
+            app.processEvents()
+            splash.finish(window)
+            window.show()
 
-    if os.geteuid() != 0:
-        QtCore.QTimer.singleShot(3000, lambda: window.tray.showMessage(
-            "DefendR", _("Run with sudo for full firewall and network monitoring."),
-            QtWidgets.QSystemTrayIcon.Information, 3000))
+            def listen_raise():
+                while True:
+                    try:
+                        conn, addr = lock_sock.accept()
+                        data = conn.recv(1024)
+                        if data == b"raise":
+                            window.raise_(); window.activateWindow(); window.show(); window.tray.show()
+                        conn.close()
+                    except Exception: break
+            threading.Thread(target=listen_raise, daemon=True).start()
 
+            if os.geteuid() != 0:
+                QtCore.QTimer.singleShot(3000, lambda: window.tray.showMessage(
+                    "DefendR", _("Run with sudo for full firewall and network monitoring."),
+                    QtWidgets.QSystemTrayIcon.Information, 3000))
+
+    timer = QtCore.QTimer()
+    timer.timeout.connect(advance_splash)
+    timer.start(1100)
     sys.exit(app.exec())
 
 if __name__ == "__main__":
