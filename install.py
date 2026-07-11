@@ -15,6 +15,8 @@ LANGS = {
         "welcome": "Bem-vindo ao DefendR!",
         "desc": "Antivírus avançado com firewall, proteção em tempo real e ferramentas de segurança.",
         "select_lang": "Selecione o idioma da instalação:",
+        "files_title": "Arquivos do DefendR",
+        "files_desc": "O executável principal está destacado abaixo:",
         "dep_title": "Verificando Dependências",
         "dep_desc": "Verificando pacotes necessários...",
         "dep_ok": "OK",
@@ -59,6 +61,8 @@ LANGS = {
         "welcome": "Welcome to DefendR!",
         "desc": "Advanced antivirus with firewall, real-time protection and security tools.",
         "select_lang": "Select installation language:",
+        "files_title": "DefendR Files",
+        "files_desc": "The main executable is highlighted below:",
         "dep_title": "Checking Dependencies",
         "dep_desc": "Checking required packages...",
         "dep_ok": "OK",
@@ -103,6 +107,8 @@ LANGS = {
         "welcome": "¡Bienvenido a DefendR!",
         "desc": "Antivirus avanzado con firewall, protección en tiempo real y herramientas de seguridad.",
         "select_lang": "Seleccione el idioma de instalación:",
+        "files_title": "Archivos de DefendR",
+        "files_desc": "El ejecutable principal está resaltado abajo:",
         "dep_title": "Verificando Dependencias",
         "dep_desc": "Verificando paquetes necesarios...",
         "dep_ok": "OK",
@@ -147,6 +153,8 @@ LANGS = {
         "welcome": "Bienvenue sur DefendR !",
         "desc": "Antivirus avancé avec pare-feu, protection en temps réel et outils de sécurité.",
         "select_lang": "Choisissez la langue d'installation :",
+        "files_title": "Fichiers de DefendR",
+        "files_desc": "L'exécutable principal est mis en évidence ci-dessous :",
         "dep_title": "Vérification des Dépendances",
         "dep_desc": "Vérification des paquets requis...",
         "dep_ok": "OK",
@@ -191,6 +199,8 @@ LANGS = {
         "welcome": "Willkommen bei DefendR!",
         "desc": "Erweitertes Antivirus mit Firewall, Echtzeitschutz und Sicherheitstools.",
         "select_lang": "Installationssprache wählen:",
+        "files_title": "DefendR Dateien",
+        "files_desc": "Die ausführbare Hauptdatei ist unten hervorgehoben:",
         "dep_title": "Abhängigkeiten prüfen",
         "dep_desc": "Prüfe erforderliche Pakete...",
         "dep_ok": "OK",
@@ -235,6 +245,8 @@ LANGS = {
         "welcome": "Benvenuto in DefendR!",
         "desc": "Antivirus avanzato con firewall, protezione in tempo reale e strumenti di sicurezza.",
         "select_lang": "Seleziona la lingua di installazione:",
+        "files_title": "File di DefendR",
+        "files_desc": "L'eseguibile principale è evidenziato qui sotto:",
         "dep_title": "Verifica Dipendenze",
         "dep_desc": "Verifica pacchetti richiesti...",
         "dep_ok": "OK",
@@ -279,6 +291,8 @@ LANGS = {
         "welcome": "Добро пожаловать в DefendR!",
         "desc": "Продвинутый антивирус с файрволом, защитой в реальном времени и инструментами безопасности.",
         "select_lang": "Выберите язык установки:",
+        "files_title": "Файлы DefendR",
+        "files_desc": "Основной исполняемый файл выделен ниже:",
         "dep_title": "Проверка зависимостей",
         "dep_desc": "Проверка необходимых пакетов...",
         "dep_ok": "OK",
@@ -392,10 +406,11 @@ class InstallWizard(QtWidgets.QWizard):
         """)
 
         self.setPage(0, LangPage(self))
-        self.setPage(1, DepsPage(self))
-        self.setPage(2, SudoPage(self))
-        self.setPage(3, InstallPage(self))
-        self.setPage(4, DonePage(self))
+        self.setPage(1, FilesPage(self))
+        self.setPage(2, DepsPage(self))
+        self.setPage(3, SudoPage(self))
+        self.setPage(4, InstallPage(self))
+        self.setPage(5, DonePage(self))
 
         self.setStartId(0)
         self.setButtonText(QtWidgets.QWizard.NextButton, _("next"))
@@ -460,6 +475,71 @@ class LangPage(QtWidgets.QWizardPage):
         self.wiz.setButtonText(QtWidgets.QWizard.BackButton, _("back"))
         self.wiz.setButtonText(QtWidgets.QWizard.CancelButton, _("cancel"))
         self.wiz.setButtonText(QtWidgets.QWizard.FinishButton, _("finish"))
+        return True
+
+class FilesPage(QtWidgets.QWizardPage):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.wiz = parent
+        self.setTitle("")
+        self.setSubTitle("")
+        layout = QtWidgets.QVBoxLayout()
+        title = QtWidgets.QLabel(_("files_title"))
+        title.setObjectName("title")
+        title.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(title)
+        sub = QtWidgets.QLabel(_("files_desc"))
+        sub.setObjectName("sub")
+        sub.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(sub)
+        layout.addSpacing(8)
+        self.file_list = QtWidgets.QListWidget()
+        layout.addWidget(self.file_list)
+        layout.addStretch()
+        self.setLayout(layout)
+
+    def initializePage(self):
+        self.file_list.clear()
+        items = []
+        for f in sorted(os.listdir(DEFENDR_DIR)):
+            fp = os.path.join(DEFENDR_DIR, f)
+            if f.startswith(".") or f == "__pycache__":
+                continue
+            is_dir = os.path.isdir(fp)
+            is_exec = f == "defendr.py" or f == "run.sh"
+            is_installer = f == "install.py"
+            name = f + "/" if is_dir else f
+            if is_exec:
+                icon = "⚡"
+                color = "#7c4dff"
+                weight = "700"
+                prefix = "▶  "
+            elif is_installer:
+                icon = "📦"
+                color = "#00e676"
+                weight = "600"
+                prefix = "   "
+            elif is_dir:
+                icon = "📁"
+                color = "#b0b0b0"
+                weight = "400"
+                prefix = "   "
+            else:
+                icon = "📄"
+                color = "#8e8e93"
+                weight = "400"
+                prefix = "   "
+            item = QtWidgets.QListWidgetItem(f"  {icon}  {prefix}{name}")
+            item.setForeground(QtGui.QColor(color))
+            fnt = item.font()
+            fnt.setWeight(QtGui.QFont.Bold if weight == "700" else QtGui.QFont.Normal)
+            item.setFont(fnt)
+            items.append((is_exec, item))
+        items.sort(key=lambda x: (not x[0], x[1].text()))
+        for _, item in items:
+            self.file_list.addItem(item)
+
+    def validatePage(self):
         return True
 
 class DepsPage(QtWidgets.QWizardPage):
