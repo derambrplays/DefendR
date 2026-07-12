@@ -151,8 +151,9 @@ class FirewallManager(QtCore.QObject):
             # Reset counter for IPs that haven't been seen in 30s
             for ip in list(self._bf_counter.keys()):
                 if now - self._bf_last.get(ip, 0) > 30:
-                    del self._bf_counter[ip]
-                    del self._bf_last[ip]
+                    self._bf_counter.pop(ip, None)
+                    self._bf_last.pop(ip, None)
+                    self._bf_alerted.discard(ip)
             # Alert if any IP has been seen more than 10 times total
             for ip, count in self._bf_counter.items():
                 if count > 10 and ip not in self._bf_alerted:

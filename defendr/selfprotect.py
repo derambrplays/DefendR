@@ -16,6 +16,7 @@ class SelfProtection(QtCore.QObject):
         self.main_pid = main_pid
         self.running = False
         self._thread = None
+        self._watchdog_proc = None
         self._baseline = {}
         self._compute_baseline()
 
@@ -46,6 +47,9 @@ class SelfProtection(QtCore.QObject):
         self.running = False
         if self._thread:
             self._thread.join(timeout=3)
+        if self._watchdog_proc and self._watchdog_proc.poll() is None:
+            self._watchdog_proc.kill()
+            self._watchdog_proc.wait(timeout=3)
 
     def _run(self):
         while self.running:
@@ -120,9 +124,9 @@ class SelfProtection(QtCore.QObject):
                 "    break\n"
                 "  time.sleep(8)\n"
             )
-            subprocess.Popen(
+            self._watchdog_proc = subprocess.Popen(
                 [sys.executable, "-c", code],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         except Exception:
-            pass
+            self._watchdog_proc = None

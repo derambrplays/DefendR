@@ -17,6 +17,7 @@ class NetworkMonitor(QtCore.QObject):
         self.gateway_ip = None
         self._conn_history = {}
         self._port_scan_alerted = set()
+        self._suspect_connections = set()
     def start(self):
         if getattr(self, '_mon_thread', None) and self._mon_thread.is_alive():
             self.monitoring = False
@@ -94,7 +95,7 @@ class NetworkMonitor(QtCore.QObject):
             import psutil
             try: conns = psutil.net_connections(kind="tcp")
             except (psutil.AccessDenied, PermissionError): return
-            seen = set()
+            active = set()
             for conn in conns:
                 if not (conn.status == "ESTABLISHED" and conn.raddr): continue
                 ip,port=conn.raddr.ip,conn.raddr.port
@@ -103,14 +104,18 @@ class NetworkMonitor(QtCore.QObject):
                     "172.20.","172.21.","172.22.","172.23.","172.24.","172.25.","172.26.","172.27.","172.28.","172.29.","172.30.","172.31.","192.168.","::1")
                 if any(ip.startswith(p) for p in local_prefixes): continue
                 key = f"{ip}:{port}"
-                if key in seen: continue
-                seen.add(key)
+                if key in active: continue
+                active.add(key)
                 if port in {4444,5555,6666,1337,31337,12345,54321,22222}:
+                    if key in self._suspect_connections: continue
+                    self._suspect_connections.add(key)
                     pname="?"
                     if conn.pid:
                         try: pname=psutil.Process(conn.pid).name()
                         except Exception: pass
                     self._fire_intrusion("MEDIUM", f"Conexao suspeita: {ip}:{port} ({pname})", "Conexao Remota", ip)
+            # Cleanup stale entries
+            self._suspect_connections &= active
         except Exception: pass
 
     def _check_port_scan(self):

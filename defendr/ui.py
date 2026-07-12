@@ -409,6 +409,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.fw_detect_timer.stop()
         self.netmon.stop()
         self.selfprotect.stop()
+        self.rt_protector.stop()
+        self.usb_scanner.stop()
+        self.game_mode.stop()
         self.firewall.disable()
         self.engine.stop()
         self.ransomware.stop()
@@ -465,6 +468,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.netmon.stop(); self.rt_protector.stop(); self.ransomware.stop()
         self.usb_scanner.stop(); self.game_mode.stop()
         if hasattr(self, 'webcam_protector'): self.webcam_protector.stop()
+        self.selfprotect.stop()
         self.engine.scanning = False
         self.monitor_timer.stop()
         self.proc_timer.stop()
