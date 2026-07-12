@@ -358,6 +358,223 @@ class BehavioralProtection(QtCore.QObject):
             pass
 
 
+class DosDetector(QtCore.QObject):
+    alert_signal = QtCore.pyqtSignal(str, str)
+
+    def __init__(self):
+        super().__init__()
+        self.running = False
+        self._thread = None
+        self._conn_tracker = {}
+        self._ddos_tracker = {}
+        self._prev_rx = {}
+        self._prev_ts = time.time()
+
+    def start(self):
+        self.running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self.running = False
+        if self._thread:
+            self._thread.join(timeout=3)
+
+    def _run(self):
+        while self.running:
+            try:
+                self._check_syn_flood()
+                self._check_conn_flood()
+                self._check_ddos()
+                self._check_bandwidth()
+                time.sleep(5)
+            except Exception:
+                pass
+
+    def _parse_tcp_states(self):
+        """Parse /proc/net/tcp and tcp6 returning connections by state and IP"""
+        result = {"syn_recv": {}, "estab": {}, "all": {}}
+        for proc_path in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                with open(proc_path) as f:
+                    for line in f.readlines()[1:]:
+                        parts = line.strip().split()
+                        if len(parts) < 4:
+                            continue
+                        local = parts[1]
+                        remote = parts[2]
+                        state = int(parts[3], 16)
+                        # TCP states: 0A=SYN_RECV, 01=ESTABLISHED
+                        # Extract IP from remote addr (format: 0100007F:0035)
+                        ip_port = remote.split(":")
+                        if len(ip_port) != 2:
+                            continue
+                        ip_hex = ip_port[0]
+                        ip = self._hex_to_ip(ip_hex)
+                        if not ip:
+                            continue
+                        if state == 0x0A:
+                            result["syn_recv"][ip] = result["syn_recv"].get(ip, 0) + 1
+                        elif state == 0x01:
+                            result["estab"][ip] = result["estab"].get(ip, 0) + 1
+                        result["all"][ip] = result["all"].get(ip, 0) + 1
+            except Exception:
+                pass
+        return result
+
+    def _hex_to_ip(self, hex_ip):
+        """Convert hex IP like 0100007F to dotted decimal"""
+        try:
+            if len(hex_ip) == 8:
+                # IPv4: 0100007F -> 127.0.0.1 (little-endian)
+                parts = []
+                for i in range(0, 8, 2):
+                    parts.append(str(int(hex_ip[i:i+2], 16)))
+                return ".".join(reversed(parts))
+            elif len(hex_ip) == 32:
+                # IPv6
+                parts = []
+                for i in range(0, 32, 8):
+                    p = hex_ip[i:i+8]
+                    parts.append(p[0:4] + ":" + p[4:8])
+                return ":".join(parts)
+        except Exception:
+            pass
+        return None
+
+    def _check_syn_flood(self):
+        """Detect SYN flood by checking SYN_RECV connections"""
+        states = self._parse_tcp_states()
+        syn_recv = states.get("syn_recv", {})
+        total_syn = sum(syn_recv.values())
+
+        if total_syn > 50:
+            top_ip = max(syn_recv, key=syn_recv.get)
+            self.alert_signal.emit("HIGH",
+                f"SYN Flood detectado! {total_syn} conexoes SYN_RECV, "
+                f"maior origem: {top_ip} ({syn_recv[top_ip]} conexoes)")
+
+        # Check per-IP SYN flood
+        for ip, count in syn_recv.items():
+            if ip in ("127.0.0.1", "::1", "0.0.0.0"):
+                continue
+            if count > 20:
+                self.alert_signal.emit("HIGH",
+                    f"SYN Flood de IP {ip}: {count} conexoes SYN_RECV")
+
+    def _check_conn_flood(self):
+        """Detect connection flood from single IP"""
+        now = time.time()
+        states = self._parse_tcp_states()
+        total_conns = states.get("all", {})
+
+        for ip, count in total_conns.items():
+            if ip in ("127.0.0.1", "::1", "0.0.0.0"):
+                continue
+            if ip not in self._conn_tracker:
+                self._conn_tracker[ip] = []
+            self._conn_tracker[ip].append((now, count))
+
+            # Keep last 10 seconds
+            self._conn_tracker[ip] = [
+                (t, c) for t, c in self._conn_tracker[ip] if now - t < 10
+            ]
+
+            if len(self._conn_tracker[ip]) < 3:
+                continue
+
+            avg = sum(c for _, c in self._conn_tracker[ip]) / len(self._conn_tracker[ip])
+            if avg > 80:
+                self.alert_signal.emit("HIGH",
+                    f"DoS detectado! IP {ip} com media de {avg:.0f} conexoes "
+                    f"nos ultimos 10s")
+                self._conn_tracker[ip] = []
+
+    def _check_ddos(self):
+        """Detect DDoS by checking many IPs hitting same port"""
+        now = time.time()
+        states = self._parse_tcp_states()
+        total_conns = states.get("all", {})
+        external = {ip: c for ip, c in total_conns.items()
+                    if ip not in ("127.0.0.1", "::1", "0.0.0.0", "")}
+
+        # Also check iptables for packet drop rates
+        syn_drop = self._get_iptables_syn_drop()
+
+        if syn_drop > 200:
+            self.alert_signal.emit("HIGH",
+                f"DDoS suspeito! {syn_drop} pacotes SYN descartados/minuto "
+                f"({len(external)} IPs externos ativos)")
+
+        if len(external) > 30 and sum(external.values()) > 150:
+            top = sorted(external.items(), key=lambda x: -x[1])[:5]
+            top_str = ", ".join(f"{ip}({c})" for ip, c in top)
+            self.alert_signal.emit("HIGH",
+                f"DDoS detectado! {len(external)} IPs diferentes, "
+                f"total {sum(external.values())} conexoes. Top: {top_str}")
+            return
+
+        if len(external) > 15 and sum(external.values()) > 80:
+            self.alert_signal.emit("MEDIUM",
+                f"Possivel DDoS: {len(external)} IPs distintos, "
+                f"{sum(external.values())} conexoes no total")
+
+    def _get_iptables_syn_drop(self):
+        """Get SYN packet drop rate via iptables counters"""
+        try:
+            result = subprocess.run(
+                ["iptables", "-L", "-n", "-v", "-x"],
+                capture_output=True, text=True, timeout=5,
+            )
+            total_drops = 0
+            for line in result.stdout.split("\n"):
+                if "DROP" in line and "tcp" in line and "spt:" in line:
+                    parts = line.split()
+                    if parts[0].isdigit():
+                        total_drops += int(parts[0])
+            return total_drops
+        except Exception:
+            return 0
+
+    def _check_bandwidth(self):
+        """Monitor bandwidth usage via /proc/net/dev"""
+        try:
+            with open("/proc/net/dev") as f:
+                lines = f.readlines()
+            now = time.time()
+            dt = now - self._prev_ts
+            if dt < 1:
+                return
+
+            total_rx = 0
+            for line in lines[2:]:
+                parts = line.strip().split()
+                if len(parts) < 10:
+                    continue
+                iface = parts[0].rstrip(":")
+                if iface == "lo":
+                    continue
+                rx_bytes = int(parts[1])
+                total_rx += rx_bytes
+
+            if self._prev_rx:
+                prev_total = sum(self._prev_rx.values()) if isinstance(self._prev_rx, dict) else 0
+                if prev_total > 0:
+                    rate = (total_rx - prev_total) / dt
+                    rate_kbps = rate / 1024
+                    if rate_kbps > 50_000:
+                        self.alert_signal.emit("HIGH",
+                            f"Banda anormal! {rate_kbps/1000:.1f} Mbps de download")
+                    elif rate_kbps > 10_000:
+                        self.alert_signal.emit("LOW",
+                            f"Banda alta: {rate_kbps/1000:.1f} Mbps")
+
+            self._prev_rx = {"total": total_rx}
+            self._prev_ts = now
+        except Exception:
+            pass
+
+
 class AdvancedProtection(QtCore.QObject):
     alert_signal = QtCore.pyqtSignal(str, str)
 
@@ -367,11 +584,13 @@ class AdvancedProtection(QtCore.QObject):
         self.anti_exploit = AntiExploit()
         self.memory_scanner = MemoryScanner()
         self.behavioral = BehavioralProtection()
+        self.dos_detector = DosDetector()
 
         self.sandbox.alert_signal.connect(self._relay)
         self.anti_exploit.alert_signal.connect(self._relay)
         self.memory_scanner.alert_signal.connect(self._relay)
         self.behavioral.alert_signal.connect(self._relay)
+        self.dos_detector.alert_signal.connect(self._relay)
 
     def _relay(self, severity, msg):
         self.alert_signal.emit(severity, msg)
@@ -380,11 +599,13 @@ class AdvancedProtection(QtCore.QObject):
         self.anti_exploit.start()
         self.memory_scanner.start()
         self.behavioral.start()
+        self.dos_detector.start()
 
     def stop(self):
         self.anti_exploit.stop()
         self.memory_scanner.stop()
         self.behavioral.stop()
+        self.dos_detector.stop()
 
     def run_sandboxed(self, filepath, args=""):
         return self.sandbox.run_sandboxed(filepath, args)
