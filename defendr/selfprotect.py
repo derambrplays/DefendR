@@ -104,20 +104,24 @@ class SelfProtection(QtCore.QObject):
             pass
 
     def _launch_watchdog(self):
-        """Watchdog externo: reinicia o DefendR se o processo principal morrer"""
-        watchdog_code = (
-            "import os,sys,time,subprocess;"
-            "pid=int(sys.argv[1]);base=sys.argv[2];"
-            "while True:"
-            "  try:"
-            "    os.kill(pid,0);"
-            "  except:"
-            "    subprocess.Popen(['python3','defendr.py'],cwd=base);break;"
-            "  time.sleep(8)"
-        )
         try:
+            py = repr(sys.executable)
+            code = (
+                "import os,sys,time,subprocess\n"
+                f"pid={self.main_pid}\n"
+                f"base={repr(BASE)}\n"
+                f"pyexe={py}\n"
+                "while True:\n"
+                "  try:\n"
+                "    os.kill(pid,0)\n"
+                "  except OSError:\n"
+                "    p=subprocess.Popen([pyexe,'defendr.py'],cwd=base,\n"
+                "      stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+                "    break\n"
+                "  time.sleep(8)\n"
+            )
             subprocess.Popen(
-                [sys.executable, "-c", watchdog_code, str(self.main_pid), BASE],
+                [sys.executable, "-c", code],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         except Exception:
