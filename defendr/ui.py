@@ -47,24 +47,71 @@ class ScanWorker(QtCore.QThread):
     def run(self):
         try:
             paths = self.path if isinstance(self.path, list) else [self.path]
-            combined = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
-
-            def on_progress(count, msg):
-                self.progress.emit(count, msg)
-
-            for path in paths:
-                if self.mode == "completo":
-                    result = self.engine.scan_completo(path, progress_cb=on_progress)
-                else:
-                    result = self.engine.scan_rapido(path, progress_cb=on_progress)
-                combined["malicious"].extend(result.get("malicious", []))
-                combined["suspicious"].extend(result.get("suspicious", []))
-                combined["pentest"].extend(result.get("pentest", []))
-                combined["safe"] += result.get("safe", 0)
-                combined["errors"].extend(result.get("errors", []))
+            import os as os_mod
+            if os_mod.geteuid() != 0:
+                self._run_as_root(paths)
+                return
+            combined = self._run_direct(paths)
             self.finished.emit(combined)
         except Exception as e:
             self.error.emit(str(e))
+
+    def _run_direct(self, paths):
+        combined = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
+        def on_progress(count, msg):
+            self.progress.emit(count, msg)
+        for path in paths:
+            if self.mode == "completo":
+                result = self.engine.scan_completo(path, progress_cb=on_progress)
+            else:
+                result = self.engine.scan_rapido(path, progress_cb=on_progress)
+            combined["malicious"].extend(result.get("malicious", []))
+            combined["suspicious"].extend(result.get("suspicious", []))
+            combined["pentest"].extend(result.get("pentest", []))
+            combined["safe"] += result.get("safe", 0)
+            combined["errors"].extend(result.get("errors", []))
+        return combined
+
+    def _run_as_root(self, paths):
+        import subprocess, json, os as os_mod
+        script = "/usr/local/bin/defendr-sudo.sh"
+        args = [json.dumps(paths), self.mode]
+        self.progress.emit(-1, _("Solicitando permissão de root..."))
+        self._hd_proc = subprocess.Popen(
+            ["pkexec", "--action-id", "io.github.defendr", script] + args,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True,
+        )
+        combined = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
+        for line in self._hd_proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            if not self.engine.scanning:
+                self._hd_proc.kill()
+                break
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            t = obj.get("t")
+            if t == "p":
+                self.progress.emit(obj.get("p", 0), obj.get("m", ""))
+            elif t == "s":
+                self.progress.emit(-1, obj.get("m", ""))
+            elif t == "r":
+                combined = obj.get("d", combined)
+            elif t == "e":
+                self.error.emit(obj.get("m", "Erro desconhecido"))
+                return
+        self._hd_proc.wait()
+        err = self._hd_proc.stderr.read().strip()
+        if self._hd_proc.returncode != 0 and self._hd_proc.returncode is not None:
+            if self.engine.scanning:
+                self.error.emit(_("Scan como root falhou (código %d): %s") % (self._hd_proc.returncode, err[:200] if err else _("senha cancelada")))
+            return
+        self._hd_proc = None
+        self.finished.emit(combined)
 
 class SplashScreen(QtWidgets.QSplashScreen):
     def __init__(self):
@@ -1330,6 +1377,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _hd_stop_scan(self):
         self.engine.scanning = False
+        if hasattr(self, '_hd_proc') and self._hd_proc:
+            try:
+                self._hd_proc.kill()
+            except Exception:
+                pass
         self.hd_stop_btn.setEnabled(False)
         self.hd_status.setText(_("Stopping scan..."))
 
