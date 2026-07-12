@@ -39,12 +39,22 @@ class SelfProtection(QtCore.QObject):
 
     def start(self):
         self.running = True
+        try:
+            p = Path(os.path.join(BASE, ".defendr_stop"))
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         self._launch_watchdog()
 
     def stop(self):
         self.running = False
+        try:
+            Path(os.path.join(BASE, ".defendr_stop")).touch()
+        except Exception:
+            pass
         if self._thread:
             self._thread.join(timeout=3)
         if self._watchdog_proc and self._watchdog_proc.poll() is None:
@@ -107,23 +117,40 @@ class SelfProtection(QtCore.QObject):
         except Exception:
             pass
 
-    def _launch_watchdog(self):
+    @staticmethod
+    def _watchdog_script(main_pid):
+        STOP_FLAG = os.path.join(BASE, ".defendr_stop")
         try:
             py = repr(sys.executable)
             code = (
                 "import os,sys,time,subprocess\n"
-                f"pid={self.main_pid}\n"
+                f"pid={main_pid}\n"
                 f"base={repr(BASE)}\n"
+                f"stop_flag={repr(STOP_FLAG)}\n"
                 f"pyexe={py}\n"
                 "while True:\n"
+                "  if os.path.exists(stop_flag):\n"
+                "    try: os.remove(stop_flag)\n"
+                "    except: pass\n"
+                "    break\n"
                 "  try:\n"
                 "    os.kill(pid,0)\n"
                 "  except OSError:\n"
-                "    p=subprocess.Popen([pyexe,'defendr.py'],cwd=base,\n"
-                "      stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+                "    if not os.path.exists(stop_flag):\n"
+                "      subprocess.Popen([pyexe,'defendr.py'],cwd=base,\n"
+                "        stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
                 "    break\n"
                 "  time.sleep(8)\n"
             )
+            return code
+        except Exception:
+            return None
+
+    def _launch_watchdog(self):
+        try:
+            code = self._watchdog_script(self.main_pid)
+            if not code:
+                return
             self._watchdog_proc = subprocess.Popen(
                 [sys.executable, "-c", code],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

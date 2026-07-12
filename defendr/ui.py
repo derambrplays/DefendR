@@ -424,10 +424,20 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.game_mode.suppress_notifications():
             event.accept()
             return
-        event.ignore()
-        self.hide()
-        self.tray.showMessage("DefendR", _("Protecao continua ativa em segundo plano"),
-                              QtWidgets.QSystemTrayIcon.Information, 2000)
+        reply = QtWidgets.QMessageBox.question(self, "DefendR",
+            "Fechar o DefendR totalmente?\n"
+            "'Nao' minimiza para a bandeja (protecao continua).",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No)
+        if reply == QtWidgets.QMessageBox.Yes:
+            event.accept()
+            self._quit_app()
+        else:
+            event.ignore()
+            self.hide()
+            self.tray.showMessage("DefendR",
+                _("Protecao continua ativa em segundo plano"),
+                QtWidgets.QSystemTrayIcon.Information, 2000)
 
     def _setup_tray(self):
         icon_svg = os.path.join(os.path.dirname(__file__), "icon.svg")

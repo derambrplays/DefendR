@@ -177,18 +177,21 @@ class MemoryScanner(QtCore.QObject):
         while self.running:
             try:
                 self._scan_processes()
-                time.sleep(15)
+                time.sleep(120)
             except Exception:
                 pass
 
     def _scan_processes(self):
         try:
             import psutil
-            for proc in psutil.process_iter(["pid", "name", "memory_maps"]):
+            suspicious_names = {"nc", "ncat", "bash", "sh", "python3", "perl",
+                                "ruby", "nmap", "masscan", "hydra", "medusa",
+                                "msfconsole", "meterpreter", "cobaltstrike"}
+            for proc in psutil.process_iter(["pid", "name"]):
                 try:
                     pid = proc.info["pid"]
                     name = proc.info["name"]
-                    if not name:
+                    if not name or name not in suspicious_names:
                         continue
                     self._scan_process_memory(pid, name)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -199,10 +202,6 @@ class MemoryScanner(QtCore.QObject):
     def _scan_process_memory(self, pid, name):
         """Scan process memory for shellcode signatures"""
         try:
-            target = f"/proc/{pid}/mem"
-            if not os.path.exists(target):
-                return
-
             maps_path = f"/proc/{pid}/maps"
             if not os.path.exists(maps_path):
                 return
@@ -212,8 +211,6 @@ class MemoryScanner(QtCore.QObject):
 
             for line in maps.split("\n"):
                 if "rw-p" not in line and "rwxp" not in line:
-                    continue
-                if "[heap]" not in line and "[stack]" not in line and "rw" not in line:
                     continue
 
                 parts = line.split()
@@ -273,7 +270,7 @@ class BehavioralProtection(QtCore.QObject):
                 self._check_new_processes()
                 self._check_fork_bomb()
                 self._check_suspicious_procs()
-                time.sleep(3)
+                time.sleep(15)
             except Exception:
                 pass
 
@@ -331,27 +328,23 @@ class BehavioralProtection(QtCore.QObject):
     def _check_suspicious_procs(self):
         try:
             import psutil
-            for proc in psutil.process_iter(["pid", "name", "cmdline", "connections"]):
+            sus_names = {"nc", "ncat", "bash", "sh", "python3", "perl",
+                         "ruby", "php", "nmap", "masscan", "hydra", "medusa"}
+            for proc in psutil.process_iter(["pid", "name", "connections"]):
                 try:
                     name = proc.info["name"] or ""
-                    cmdline = " ".join(proc.info["cmdline"] or []) if proc.info["cmdline"] else ""
+                    if name not in sus_names:
+                        continue
                     conns = proc.info["connections"] or []
-
-                    # Detect reverse shell indicators
-                    if conns and any(c.raddr for c in conns):
-                        for c in conns:
-                            if not c.raddr:
-                                continue
-                            ip = c.raddr.ip
-                            port = c.raddr.port
-                            # External connection from suspicious process
-                            if ip not in ("127.0.0.1", "::1") and name in (
-                                "nc", "ncat", "bash", "sh", "python3", "perl",
-                            ):
-                                if port not in (80, 443, 53):
-                                    self.alert_signal.emit("HIGH",
-                                        f"Possible reverse shell: {name}({proc.pid}) -> {ip}:{port}")
-                                    break
+                    for c in conns:
+                        if not c.raddr:
+                            continue
+                        ip = c.raddr.ip
+                        port = c.raddr.port
+                        if ip not in ("127.0.0.1", "::1") and port not in (80, 443, 53):
+                            self.alert_signal.emit("HIGH",
+                                f"Possivel reverse shell: {name}({proc.pid}) -> {ip}:{port}")
+                            break
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
         except Exception:
@@ -387,7 +380,7 @@ class DosDetector(QtCore.QObject):
                 self._check_conn_flood()
                 self._check_ddos()
                 self._check_bandwidth()
-                time.sleep(5)
+                time.sleep(15)
             except Exception:
                 pass
 
