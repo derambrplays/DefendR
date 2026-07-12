@@ -78,7 +78,7 @@ class ScanWorker(QtCore.QThread):
         args = [json.dumps(paths), self.mode]
         self.progress.emit(-1, _("Solicitando permissão de root..."))
         self._hd_proc = subprocess.Popen(
-            ["pkexec", "--action-id", "io.github.defendr", script] + args,
+            ["pkexec", script, "scan"] + args,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True,
         )
