@@ -66,7 +66,8 @@ FILE_MAGIC_BYTES = (
 )
 SUSPICIOUS_EXTS = frozenset({".exe", ".dll", ".scr", ".ps1", ".vbs", ".vbe",
                     ".js", ".jse", ".wsf", ".hta", ".bat",
-                    ".cmd", ".com", ".pif", ".jar", ".docm", ".xlsm"})
+                    ".cmd", ".com", ".pif", ".jar", ".docm", ".xlsm",
+                    ".sh", ".py", ".pl", ".rb", ".php", ".elf", ".bin"})
 
 # Real malware YARA-like patterns (not just file types)
 MALWARE_PATTERNS = (
@@ -99,6 +100,29 @@ MALWARE_PATTERNS = (
     (b"base64", "Base64 encoded content"),
     (b"FromBase64", "Base64 decoding"),
     (b"cmd.exe /c", "Command execution via cmd"),
+    # Linux malware patterns
+    (b".connect(", "Network connection (potential reverse shell)"),
+    (b"socket", "Socket network operation"),
+    (b"subprocess.call", "Process execution via script"),
+    (b"subprocess.Popen", "Process execution via script"),
+    (b"/bin/sh", "Shell execution"),
+    (b"/bin/bash", "Bash execution"),
+    (b".locked", "Ransomware extension pattern"),
+    (b".encrypted", "Ransomware extension pattern"),
+    (b"ransomware", "Ransomware indicator"),
+    (b"fork_bomb", "Fork bomb simulation"),
+    (b"portscan", "Port scan tool"),
+    (b"dos_sim", "DoS simulation script"),
+    (b"masscan", "Masscan port scanner"),
+    (b"nmap", "Nmap port scanner"),
+    (b"hydra", "Hydra brute force tool"),
+    (b"medusa", "Medusa brute force tool"),
+    (b"reverse_shell", "Reverse shell script"),
+    (b"backdoor", "Backdoor indicator"),
+    (b"rootkit", "Rootkit indicator"),
+    (b"keylog", "Keylogger indicator"),
+    (b"sniff", "Packet sniffer"),
+    (b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE", "EICAR test malware (padrao internacional)"),
 )
 
 # System paths exempt from heavy scanning to reduce noise
@@ -118,7 +142,13 @@ SUSPICIOUS_STRINGS = (
     b"bypass", b"amsi", b"Invoke-",
     b"DownloadString", b"DownloadFile",
     b"Start-Process -Hidden",
-    b"WScript.Shell", b"FileSystemObject")
+    b"WScript.Shell", b"FileSystemObject",
+    b".connect(", b"socket", b"/bin/sh", b"/bin/bash",
+    b"subprocess.call", b"subprocess.Popen",
+    b".locked", b".encrypted", b"ransomware",
+    b"reverse_shell", b"backdoor", b"rootkit",
+    b"keylog", b"sniff", b"portscan", b"nmap",
+    b"dup2", b"fileno")
 SUSPICIOUS_PROCESSES = frozenset({
     "keylogger": "suspicious", "logkeys": "suspicious",
     "xnsniff": "suspicious", "xngrab": "suspicious",

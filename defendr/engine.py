@@ -340,8 +340,14 @@ class DefendREngine:
                 for sig, desc in self.file_magic:
                     if header.startswith(sig):
                         match_reasons.append(desc)
+                for sig, desc in self.malware_patterns:
+                    if sig in content:
+                        if desc not in match_reasons:
+                            match_reasons.append(desc)
+                            if len(match_reasons) >= 3:
+                                break
                 found = [s for s in self.suspicious_strings if s in content]
-                if len(found) >= 3:
+                if len(found) >= 2:
                     match_reasons.append(", ".join(s.decode() for s in found[:4]))
                 if match_reasons:
                     return {
