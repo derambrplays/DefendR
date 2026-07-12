@@ -158,61 +158,91 @@ class IntrusionPopup(QtWidgets.QWidget):
         super().__init__(parent)
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.Tool)
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent;")
-        self.setGeometry(0, 0, 500, 300)
+
+        # Position: top-right corner, below clock area
+        screen = QtWidgets.QApplication.primaryScreen().geometry()
+        w, h = 420, 160
+        margin = 12
+        x = screen.width() - w - margin
+        y = margin + 28
+        self.setGeometry(x, y, w, h)
 
         colors = {"HIGH": ("#ff453a", "#ff3b30"), "MEDIUM": ("#ffd60a", "#ff9500"), "LOW": ("#30d158", "#34c759")}
         main_color, accent = colors.get(severity, colors["HIGH"])
 
         frame = QtWidgets.QFrame(self)
-        frame.setGeometry(10, 10, 480, 280)
+        frame.setGeometry(0, 0, w, h)
         frame.setStyleSheet(f"""
             QFrame {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 #2c2c2e, stop:1 #1c1c1e);
                 border: 2px solid {main_color};
-                border-radius: 16px;
+                border-radius: 14px;
             }}
         """)
+        shadow = QtWidgets.QGraphicsDropShadowEffect(frame)
+        shadow.setBlurRadius(30)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QtGui.QColor(0, 0, 0, 120))
+        frame.setGraphicsEffect(shadow)
 
-        icon = QtWidgets.QLabel("🛑", frame)
-        icon.setStyleSheet(f"font-size: 48px; background: transparent;")
-        icon.move(30, 30)
-        icon.resize(60, 60)
+        icon = QtWidgets.QLabel("🛑" if severity == "HIGH" else "⚠️", frame)
+        icon.setStyleSheet("font-size: 28px; background: transparent;")
+        icon.move(14, 14)
+        icon.resize(36, 36)
 
         title_lbl = QtWidgets.QLabel(title, frame)
-        title_lbl.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {main_color}; background: transparent;")
-        title_lbl.move(100, 30)
-        title_lbl.resize(360, 30)
+        title_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {main_color}; background: transparent;")
+        title_lbl.move(56, 14)
+        title_lbl.resize(w - 70, 22)
 
         sev_lbl = QtWidgets.QLabel(f"[{severity}] {attack_type}", frame)
-        sev_lbl.setStyleSheet(f"font-size: 13px; color: {accent}; background: transparent; font-weight: 600;")
-        sev_lbl.move(100, 65)
-        sev_lbl.resize(360, 20)
+        sev_lbl.setStyleSheet(f"font-size: 11px; color: {accent}; background: transparent; font-weight: 600;")
+        sev_lbl.move(56, 38)
+        sev_lbl.resize(w - 70, 18)
 
         msg_lbl = QtWidgets.QLabel(message, frame)
         msg_lbl.setWordWrap(True)
-        msg_lbl.setStyleSheet(f"font-size: 12px; color: #f5f5f7; background: transparent; padding: 0px;")
-        msg_lbl.move(30, 120)
-        msg_lbl.resize(420, 80)
+        msg_lbl.setStyleSheet("font-size: 12px; color: #f5f5f7; background: transparent;")
+        msg_lbl.move(14, 66)
+        msg_lbl.resize(w - 28, 54)
 
         if source_ip:
             ip_lbl = QtWidgets.QLabel(f"Origem: {source_ip}", frame)
-            ip_lbl.setStyleSheet(f"font-size: 11px; color: #8e8e93; background: transparent;")
-            ip_lbl.move(30, 200)
-            ip_lbl.resize(300, 20)
+            ip_lbl.setStyleSheet("font-size: 10px; color: #8e8e93; background: transparent;")
+            ip_lbl.move(14, 128)
+            ip_lbl.resize(200, 16)
 
-        dismiss_btn = QtWidgets.QPushButton("Dismiss", frame)
+        dismiss_btn = QtWidgets.QPushButton("✕", frame)
         dismiss_btn.setStyleSheet(f"""
             QPushButton {{
-                background: {main_color}; color: white; border: none;
-                border-radius: 16px; padding: 8px 24px; font-size: 13px; font-weight: 600;
+                background: transparent; color: #8e8e93; border: none;
+                font-size: 16px; font-weight: 600;
             }}
-            QPushButton:hover {{ background: {accent}; }}
+            QPushButton:hover {{ color: white; }}
         """)
-        dismiss_btn.move(380 - 140, 240)
-        dismiss_btn.resize(120, 32)
+        dismiss_btn.move(w - 36, 6)
+        dismiss_btn.resize(28, 28)
         dismiss_btn.clicked.connect(self.close)
+
+        # Notification sound
+        try:
+            import subprocess
+            subprocess.run(["paplay", "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga"],
+                          capture_output=True, timeout=2)
+        except Exception:
+            QtWidgets.QApplication.beep()
+
+        # Slide-in animation
+        anim = QtCore.QPropertyAnimation(self, b"pos")
+        anim.setDuration(300)
+        anim.setStartValue(QtCore.QPoint(screen.width(), y))
+        anim.setEndValue(QtCore.QPoint(x, y))
+        anim.setEasingCurve(QtCore.QEasingCurve.OutCubic)
+        anim.start()
+        self._anim = anim
 
         self.show()
         QtCore.QTimer.singleShot(8000, self.close)
@@ -1778,7 +1808,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proc_timer.start(5000)
         self.fw_detect_timer = QtCore.QTimer()
         self.fw_detect_timer.timeout.connect(self._fw_detect_loop)
-        self.fw_detect_timer.start(8000)
+        self.fw_detect_timer.start(3000)
         self._update_dns()
         self._refresh_procs()
         # Auto-start background protections
@@ -2109,12 +2139,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _show_intrusion_popup(self, severity, msg, attack_type="", source_ip=""):
         title = "🚨 Ameaca Detectada!" if severity == "HIGH" else "⚠ Alerta de Seguranca"
-        popup = IntrusionPopup(title, msg, severity, source_ip, attack_type, self)
-        popup.move(
-            self.x() + (self.width() - 500) // 2,
-            self.y() + 20
-        )
-        popup.show()
+        IntrusionPopup(title, msg, severity, source_ip, attack_type, self)
         self.tray.showMessage(f"[{severity}] {attack_type or 'Intrusao'}", msg,
                               QtWidgets.QSystemTrayIcon.Critical, 5000)
 

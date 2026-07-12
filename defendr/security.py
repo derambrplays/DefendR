@@ -46,6 +46,11 @@ class FirewallManager(QtCore.QObject):
             subprocess.run(["iptables","-A","INPUT","-m","state","--state","ESTABLISHED,RELATED","-j","ACCEPT"], check=False, timeout=5)
             subprocess.run(["iptables","-A","INPUT","-i","lo","-j","ACCEPT"], check=False, timeout=5)
             subprocess.run(["iptables","-A","OUTPUT","-m","state","--state","ESTABLISHED,RELATED","-j","ACCEPT"], check=False, timeout=5)
+            # Allow services the user might have running (pentest server, etc.)
+            subprocess.run(["iptables","-A","INPUT","-p","tcp","--dport","5000","-j","ACCEPT"], check=False, timeout=5)
+            subprocess.run(["iptables","-A","INPUT","-p","tcp","--dport","80","-j","ACCEPT"], check=False, timeout=5)
+            subprocess.run(["iptables","-A","INPUT","-p","tcp","--dport","443","-j","ACCEPT"], check=False, timeout=5)
+            subprocess.run(["iptables","-A","INPUT","-p","tcp","--dport","22","-j","ACCEPT"], check=False, timeout=5)
             self.enabled = True
             self.status_signal.emit("Firewall enabled (default deny inbound)")
             return True, "Firewall enabled"
@@ -126,37 +131,35 @@ class FirewallManager(QtCore.QObject):
 
     def detect_brute_force(self):
         try:
-            # Check connections to port 5000 as brute force indicator
-            try:
-                import psutil
-                conns = psutil.net_connections(kind="tcp")
-                from_counter = {}
-                for conn in conns:
-                    if conn.raddr and conn.laddr and conn.laddr.port == 5000:
-                        ip = conn.raddr.ip
-                        if ip not in ("127.0.0.1", "::1"):
-                            from_counter[ip] = from_counter.get(ip, 0) + 1
-                for ip, count in from_counter.items():
-                    if count > 10:
-                        self.intrusion_signal.emit("MEDIUM",
-                            f"Brute force: {count} conexoes de {ip} na porta 5000")
-                        return True
-            except Exception:
-                pass
-            # Fallback: check journalctl
-            try:
-                r = subprocess.run(["journalctl", "--since", "5 min ago", "-n", "100",
-                                   "--no-pager"], capture_output=True, text=True, timeout=5,
-                                   encoding="utf-8", errors="surrogateescape")
-                login_attempts = 0
-                for line in r.stdout.split("\n"):
-                    if "login" in line.lower() and ("fail" in line.lower() or "invalid" in line.lower()):
-                        login_attempts += 1
-                if login_attempts > 10:
-                    self.intrusion_signal.emit("MEDIUM", f"Brute force: {login_attempts} SSH/login failures in 5 min")
+            import psutil
+            try: conns = psutil.net_connections(kind="tcp")
+            except (psutil.AccessDenied, PermissionError): return False
+            now = time.time()
+            if not hasattr(self, '_bf_counter'):
+                self._bf_counter = {}
+                self._bf_last = {}
+                self._bf_alerted = set()
+            # Increment counter for each external IP seen
+            seen_ips = set()
+            for conn in conns:
+                if not (conn.raddr and conn.laddr and conn.laddr.port == 5000): continue
+                ip = conn.raddr.ip
+                if ip in ("127.0.0.1", "::1"): continue
+                seen_ips.add(ip)
+                self._bf_counter[ip] = self._bf_counter.get(ip, 0) + 1
+                self._bf_last[ip] = now
+            # Reset counter for IPs that haven't been seen in 30s
+            for ip in list(self._bf_counter.keys()):
+                if now - self._bf_last.get(ip, 0) > 30:
+                    del self._bf_counter[ip]
+                    del self._bf_last[ip]
+            # Alert if any IP has been seen more than 10 times total
+            for ip, count in self._bf_counter.items():
+                if count > 10 and ip not in self._bf_alerted:
+                    self._bf_alerted.add(ip)
+                    self.intrusion_signal.emit("MEDIUM",
+                        f"Brute force: {count} conexoes de {ip} na porta 5000")
                     return True
-            except Exception:
-                pass
         except Exception:
             pass
         return False

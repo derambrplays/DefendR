@@ -27,7 +27,7 @@ class NetworkMonitor(QtCore.QObject):
         while self.monitoring:
             try:
                 self._check_arp(); self._check_ports(); self._check_dns(); self._check_connections(); self._check_port_scan()
-                time.sleep(5)
+                time.sleep(2)
             except Exception: pass
     def _get_gateway(self):
         try:
@@ -115,7 +115,7 @@ class NetworkMonitor(QtCore.QObject):
             except (psutil.AccessDenied, PermissionError): return
             now = time.time()
             for conn in all_conns:
-                if not (conn.raddr and conn.status in ("SYN_SENT", "ESTABLISHED", "CLOSE_WAIT")): continue
+                if not (conn.raddr and conn.status in ("SYN_SENT", "ESTABLISHED", "CLOSE_WAIT", "TIME_WAIT", "LAST_ACK", "FIN_WAIT1", "FIN_WAIT2")): continue
                 ip = conn.raddr.ip
                 if ip in ("127.0.0.1", "::1"): continue
                 if ip not in self._conn_history:
