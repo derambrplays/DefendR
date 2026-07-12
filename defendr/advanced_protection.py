@@ -67,6 +67,7 @@ class AntiExploit(QtCore.QObject):
         super().__init__()
         self.running = False
         self._thread = None
+        self._alert_cache = {}
         self._known_exploit_indicators = {
             "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
             "LD_DEBUG", "LD_ORIGIN_PATH",
@@ -81,6 +82,14 @@ class AntiExploit(QtCore.QObject):
         self.running = False
         if self._thread:
             self._thread.join(timeout=3)
+
+    def _dedup_emit(self, severity, msg, ttl=300):
+        now = time.time()
+        key = (severity, msg)
+        if key in self._alert_cache and now - self._alert_cache[key] < ttl:
+            return
+        self._alert_cache[key] = now
+        self.alert_signal.emit(severity, msg)
 
     def _run(self):
         while self.running:
@@ -100,7 +109,7 @@ class AntiExploit(QtCore.QObject):
             for key in self._known_exploit_indicators:
                 for e in env:
                     if e.startswith(key + "=") and not e.startswith(f"{key}="):
-                        self.alert_signal.emit("HIGH",
+                        self._dedup_emit("HIGH",
                             f"Possivel exploit: {key} injetado no environment")
         except Exception:
             pass
@@ -110,7 +119,7 @@ class AntiExploit(QtCore.QObject):
             with open("/proc/sys/kernel/yama/ptrace_scope") as f:
                 scope = f.read().strip()
             if scope == "0":
-                self.alert_signal.emit("LOW",
+                self._dedup_emit("LOW",
                     "ptrace_scope=0: qualquer processo pode depurar outros")
         except Exception:
             pass
@@ -120,10 +129,10 @@ class AntiExploit(QtCore.QObject):
             with open("/proc/sys/kernel/randomize_va_space") as f:
                 val = f.read().strip()
             if val == "0":
-                self.alert_signal.emit("HIGH",
+                self._dedup_emit("HIGH",
                     "ASLR desabilitado! Sistema vulneravel a exploit")
             elif val == "1":
-                self.alert_signal.emit("LOW",
+                self._dedup_emit("LOW",
                     "ASLR parcial (1). Recomendado: 2 (full)")
         except Exception:
             pass
@@ -149,6 +158,7 @@ class MemoryScanner(QtCore.QObject):
         super().__init__()
         self.running = False
         self._thread = None
+        self._alert_cache = {}
         self._shellcode_patterns = self._compile_patterns()
 
     def _compile_patterns(self):
@@ -199,6 +209,14 @@ class MemoryScanner(QtCore.QObject):
         except Exception:
             pass
 
+    def _dedup_emit(self, severity, msg, ttl=600):
+        now = time.time()
+        key = (severity, msg)
+        if key in self._alert_cache and now - self._alert_cache[key] < ttl:
+            return
+        self._alert_cache[key] = now
+        self.alert_signal.emit(severity, msg)
+
     def _scan_process_memory(self, pid, name):
         """Scan process memory for shellcode signatures"""
         try:
@@ -235,7 +253,7 @@ class MemoryScanner(QtCore.QObject):
                         data = mem.read(min(size, 4096))
                         for sig, desc in self._shellcode_patterns.items():
                             if sig in data:
-                                self.alert_signal.emit("HIGH",
+                                self._dedup_emit("HIGH",
                                     f"Shellcode detectado em {name}({pid}): {desc}")
                 except Exception:
                     pass
@@ -250,6 +268,7 @@ class BehavioralProtection(QtCore.QObject):
         super().__init__()
         self.running = False
         self._thread = None
+        self._alert_cache = {}
         self._prev_procs = set()
         self._fork_bomb_counter = {}
         self._process_births = {}
@@ -273,6 +292,14 @@ class BehavioralProtection(QtCore.QObject):
                 time.sleep(15)
             except Exception:
                 pass
+
+    def _dedup_emit(self, severity, msg, ttl=300):
+        now = time.time()
+        key = (severity, msg)
+        if key in self._alert_cache and now - self._alert_cache[key] < ttl:
+            return
+        self._alert_cache[key] = now
+        self.alert_signal.emit(severity, msg)
 
     def _check_new_processes(self):
         now = time.time()
@@ -303,7 +330,7 @@ class BehavioralProtection(QtCore.QObject):
                             parent = psutil.Process(ppid).name()
                         except Exception:
                             pass
-                        self.alert_signal.emit("MEDIUM",
+                        self._dedup_emit("MEDIUM",
                             f"Processo suspeito: {name}({pid}) forked por {parent}({ppid}) "
                             f"{len(self._process_births[ppid])}x em 5s")
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -320,7 +347,7 @@ class BehavioralProtection(QtCore.QObject):
                 return
             if total > 500 and total > self._fork_bomb_counter.get("last", 0) + 100:
                 self._fork_bomb_counter["last"] = total
-                self.alert_signal.emit("HIGH",
+                self._dedup_emit("HIGH",
                     f"Possivel fork bomb: {total} processos rodando!")
         except Exception:
             pass
@@ -342,7 +369,7 @@ class BehavioralProtection(QtCore.QObject):
                         ip = c.raddr.ip
                         port = c.raddr.port
                         if ip not in ("127.0.0.1", "::1") and port not in (80, 443, 53):
-                            self.alert_signal.emit("HIGH",
+                            self._dedup_emit("HIGH",
                                 f"Possivel reverse shell: {name}({proc.pid}) -> {ip}:{port}")
                             break
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -358,6 +385,7 @@ class DosDetector(QtCore.QObject):
         super().__init__()
         self.running = False
         self._thread = None
+        self._alert_cache = {}
         self._conn_tracker = {}
         self._ddos_tracker = {}
         self._prev_rx = {}
@@ -435,6 +463,14 @@ class DosDetector(QtCore.QObject):
             pass
         return None
 
+    def _dedup_emit(self, severity, msg, ttl=300):
+        now = time.time()
+        key = (severity, msg)
+        if key in self._alert_cache and now - self._alert_cache[key] < ttl:
+            return
+        self._alert_cache[key] = now
+        self.alert_signal.emit(severity, msg)
+
     def _check_syn_flood(self):
         """Detect SYN flood by checking SYN_RECV connections"""
         states = self._parse_tcp_states()
@@ -443,7 +479,7 @@ class DosDetector(QtCore.QObject):
 
         if total_syn > 50:
             top_ip = max(syn_recv, key=syn_recv.get)
-            self.alert_signal.emit("HIGH",
+            self._dedup_emit("HIGH",
                 f"SYN Flood detectado! {total_syn} conexoes SYN_RECV, "
                 f"maior origem: {top_ip} ({syn_recv[top_ip]} conexoes)")
 
@@ -452,7 +488,7 @@ class DosDetector(QtCore.QObject):
             if ip in ("127.0.0.1", "::1", "0.0.0.0"):
                 continue
             if count > 20:
-                self.alert_signal.emit("HIGH",
+                self._dedup_emit("HIGH",
                     f"SYN Flood de IP {ip}: {count} conexoes SYN_RECV")
 
     def _check_conn_flood(self):
@@ -478,7 +514,7 @@ class DosDetector(QtCore.QObject):
 
             avg = sum(c for _, c in self._conn_tracker[ip]) / len(self._conn_tracker[ip])
             if avg > 80:
-                self.alert_signal.emit("HIGH",
+                self._dedup_emit("HIGH",
                     f"DoS detectado! IP {ip} com media de {avg:.0f} conexoes "
                     f"nos ultimos 10s")
                 self._conn_tracker[ip] = []
@@ -495,20 +531,20 @@ class DosDetector(QtCore.QObject):
         syn_drop = self._get_iptables_syn_drop()
 
         if syn_drop > 200:
-            self.alert_signal.emit("HIGH",
+            self._dedup_emit("HIGH",
                 f"DDoS suspeito! {syn_drop} pacotes SYN descartados/minuto "
                 f"({len(external)} IPs externos ativos)")
 
         if len(external) > 30 and sum(external.values()) > 150:
             top = sorted(external.items(), key=lambda x: -x[1])[:5]
             top_str = ", ".join(f"{ip}({c})" for ip, c in top)
-            self.alert_signal.emit("HIGH",
+            self._dedup_emit("HIGH",
                 f"DDoS detectado! {len(external)} IPs diferentes, "
                 f"total {sum(external.values())} conexoes. Top: {top_str}")
             return
 
         if len(external) > 15 and sum(external.values()) > 80:
-            self.alert_signal.emit("MEDIUM",
+            self._dedup_emit("MEDIUM",
                 f"Possivel DDoS: {len(external)} IPs distintos, "
                 f"{sum(external.values())} conexoes no total")
 
@@ -556,11 +592,11 @@ class DosDetector(QtCore.QObject):
                     rate = (total_rx - prev_total) / dt
                     rate_kbps = rate / 1024
                     if rate_kbps > 50_000:
-                        self.alert_signal.emit("HIGH",
-                            f"Banda anormal! {rate_kbps/1000:.1f} Mbps de download")
+                        self._dedup_emit("HIGH",
+                            f"Banda anormal! {rate_kbps/1000:.1f} Mbps de download", 120)
                     elif rate_kbps > 10_000:
-                        self.alert_signal.emit("LOW",
-                            f"Banda alta: {rate_kbps/1000:.1f} Mbps")
+                        self._dedup_emit("LOW",
+                            f"Banda alta: {rate_kbps/1000:.1f} Mbps", 120)
 
             self._prev_rx = {"total": total_rx}
             self._prev_ts = now
