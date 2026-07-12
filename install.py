@@ -706,9 +706,10 @@ StartupNotify=true
             QtWidgets.QApplication.processEvents()
 
             self.log.append(_("installing_desktop2"))
-            desk_path = os.path.expanduser("~/Área de trabalho/defendr.desktop")
-            if not os.path.exists(desk_path):
-                desk_path = os.path.expanduser("~/Desktop/defendr.desktop")
+            desk_dir = os.path.expanduser("~/Área de trabalho")
+            if not os.path.isdir(desk_dir):
+                desk_dir = os.path.expanduser("~/Desktop")
+            desk_path = os.path.join(desk_dir, "defendr.desktop")
             os.makedirs(os.path.dirname(desk_path), exist_ok=True)
             with open(desk_path, "w") as f: f.write(desktop_entry)
             os.chmod(desk_path, 0o755)
