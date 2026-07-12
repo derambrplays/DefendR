@@ -334,6 +334,33 @@ class MainWindow(QtWidgets.QMainWindow):
         self._setup_tray()
         self._start_monitors()
 
+    def _update_defendr(self):
+        def task():
+            import subprocess
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            try:
+                # Fetch & pull
+                subprocess.run(["git", "fetch", "origin"], cwd=base,
+                               capture_output=True, timeout=30)
+                r = subprocess.run(["git", "pull", "origin", "main"], cwd=base,
+                                   capture_output=True, text=True, timeout=30)
+                out = r.stdout.strip() + r.stderr.strip()
+                if "Already up to date" in out:
+                    return ("info", "DefendR ja esta na versao mais recente!")
+                if r.returncode == 0 and "Updating" in out:
+                    return ("ok", "Atualizado!\n" + out[:200])
+                return ("erro", "Falha ao atualizar:\n" + out[:200])
+            except Exception as e:
+                return ("erro", f"Erro: {str(e)[:100]}")
+
+        self.upd_status.setText("Atualizando...")
+        w = TaskWorker(task)
+        w.finished.connect(lambda res: (
+            self.upd_status.setText(res[1][:60]),
+            self._show_msg(res[1])
+        ))
+        w.start()
+
     def _restart_app(self):
         self.tray.showMessage("DefendR", "Reiniciando...", QtWidgets.QSystemTrayIcon.Information, 2000)
         QtCore.QTimer.singleShot(500, lambda: (
@@ -1699,6 +1726,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.su_results.setStyleSheet(f"background: {DARK_BG}; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 10px; font-size: 12px; font-family: 'SF Mono', 'Consolas', monospace; padding: 10px; max-height: 120px;")
         su_l.addWidget(self.su_results)
         gen_l.addWidget(su_frame)
+
+        # DefendR Update
+        upd_frame = QtWidgets.QFrame()
+        upd_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
+        upd_l = QtWidgets.QVBoxLayout(upd_frame)
+        upd_l.addWidget(QtWidgets.QLabel("🛡  DefendR Atualizacao"))
+        upd_l.addWidget(QtWidgets.QLabel("Baixa a versao mais recente do GitHub e reinicia automaticamente"))
+        upd_row = QtWidgets.QHBoxLayout()
+        upd_row.addWidget(self._btn("⬇️  Atualizar DefendR", self._update_defendr, ACCENT_LIGHT))
+        self.upd_status = QtWidgets.QLabel("")
+        self.upd_status.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
+        upd_row.addWidget(self.upd_status)
+        upd_row.addStretch()
+        upd_l.addLayout(upd_row)
+        gen_l.addWidget(upd_frame)
 
         # Restart button
         restart_frame = QtWidgets.QFrame()
