@@ -31,14 +31,24 @@ def _shannon_entropy(data):
 
 def _file_walk(path, exclude=None):
     exclude = exclude or []
-    p = Path(path)
-    if p.is_dir():
-        for f in p.rglob("*"):
-            if any(str(f).startswith(e) for e in exclude):
+    if not os.path.isdir(path):
+        p = Path(path)
+        if not any(str(p).startswith(e) for e in exclude):
+            yield p
+        return
+    for root, dirs, files in os.walk(path, followlinks=False):
+        root_s = root + "/"
+        if any(root_s.startswith(e) or root == e for e in exclude):
+            dirs[:] = []
+            continue
+        # prune dirs that are in exclude
+        dirs[:] = [d for d in dirs if not any(
+            os.path.join(root, d).startswith(e) for e in exclude)]
+        for f in files:
+            fpath = os.path.join(root, f)
+            if any(fpath.startswith(e) for e in exclude):
                 continue
-            yield f
-    else:
-        yield p
+            yield Path(fpath)
 
 
 class DefendREngine:
@@ -109,34 +119,45 @@ class DefendREngine:
         self.scanning = True
         results = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
         try:
-            files = list(_file_walk(path))
-            total = len(files)
             lock = threading.Lock()
 
             def scan_one(f):
-                if not self.scanning:
-                    return None
-                if not f.is_file():
-                    return None
-                r = self._scan_file(f)
-                if r:
-                    with lock:
-                        results[r["risk"]].append(r)
-                    if result_cb:
-                        result_cb(r)
-                else:
-                    with lock:
-                        results["safe"] += 1
-                return r
+                try:
+                    if not self.scanning or not f.is_file():
+                        return
+                    r = self._scan_file(f)
+                    if r:
+                        with lock:
+                            results[r["risk"]].append(r)
+                        if result_cb:
+                            result_cb(r)
+                    else:
+                        with lock:
+                            results["safe"] += 1
+                except Exception:
+                    pass
 
+            scanned = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-                for i, _ in enumerate(pool.map(scan_one, files)):
-                    if progress_cb and total > 0:
-                        progress_cb(int((i + 1) / total * 100), f"{i + 1}/{total}")
+                futs = []
+                for f in _file_walk(path):
+                    if not self.scanning:
+                        break
+                    futs.append(pool.submit(scan_one, f))
+                    if len(futs) >= 500:
+                        for done in concurrent.futures.as_completed(futs):
+                            scanned += 1
+                            if progress_cb and scanned % 200 == 0:
+                                progress_cb(scanned, f"{scanned}")
+                        futs = []
+                for done in concurrent.futures.as_completed(futs):
+                    scanned += 1
+                    if progress_cb and scanned % 200 == 0:
+                        progress_cb(scanned, f"{scanned}")
         finally:
             self.scanning = False
             if progress_cb:
-                progress_cb(100, "Done")
+                progress_cb(scanned, f"Done - {scanned}")
         return results
 
     def scan_rapido(self, path, progress_cb=None, result_cb=None, exclude_extra=None):
@@ -154,32 +175,46 @@ class DefendREngine:
         results = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
         try:
             exclude = list(SYSTEM_PATHS) + (exclude_extra or [])
-            files = list(_file_walk(path, exclude=exclude))
-            total = len(files)
             lock = threading.Lock()
             all_pats = self.malware_patterns + self._clamav_patterns + self._remote_patterns
 
             def scan_one(f):
-                if not self.scanning or not f.is_file():
-                    return
-                r = self._scan_rapido_file(f, all_pats)
-                if r:
-                    with lock:
-                        results[r["risk"]].append(r)
-                    if result_cb:
-                        result_cb(r)
-                else:
-                    with lock:
-                        results["safe"] += 1
+                try:
+                    if not self.scanning or not f.is_file():
+                        return
+                    r = self._scan_rapido_file(f, all_pats)
+                    if r:
+                        with lock:
+                            results[r["risk"]].append(r)
+                        if result_cb:
+                            result_cb(r)
+                    else:
+                        with lock:
+                            results["safe"] += 1
+                except Exception:
+                    pass
 
+            scanned = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-                for i, _ in enumerate(pool.map(scan_one, files)):
-                    if progress_cb and total > 0:
-                        progress_cb(int((i + 1) / total * 100), f"{i + 1}/{total}")
+                futs = []
+                for f in _file_walk(path, exclude=exclude):
+                    if not self.scanning:
+                        break
+                    futs.append(pool.submit(scan_one, f))
+                    if len(futs) >= 500:
+                        for done in concurrent.futures.as_completed(futs):
+                            scanned += 1
+                            if progress_cb and scanned % 200 == 0:
+                                progress_cb(scanned, f"{scanned}")
+                        futs = []
+                for done in concurrent.futures.as_completed(futs):
+                    scanned += 1
+                    if progress_cb and scanned % 200 == 0:
+                        progress_cb(scanned, f"{scanned}")
         finally:
             self.scanning = False
             if progress_cb:
-                progress_cb(100, "Done")
+                progress_cb(scanned, f"Done - {scanned}")
         return results
 
     def _scan_rapido_file(self, fpath, all_pats):

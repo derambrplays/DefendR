@@ -48,11 +48,15 @@ class ScanWorker(QtCore.QThread):
         try:
             paths = self.path if isinstance(self.path, list) else [self.path]
             combined = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
+
+            def on_progress(count, msg):
+                self.progress.emit(count, msg)
+
             for path in paths:
                 if self.mode == "completo":
-                    result = self.engine.scan_completo(path)
+                    result = self.engine.scan_completo(path, progress_cb=on_progress)
                 else:
-                    result = self.engine.scan_rapido(path)
+                    result = self.engine.scan_rapido(path, progress_cb=on_progress)
                 combined["malicious"].extend(result.get("malicious", []))
                 combined["suspicious"].extend(result.get("suspicious", []))
                 combined["pentest"].extend(result.get("pentest", []))
@@ -1325,7 +1329,12 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         self._hd_worker = ScanWorker(self.engine, paths, mode=self.hd_mode)
         self._hd_worker.finished.connect(self._hd_scan_done)
+        self._hd_worker.progress.connect(self._hd_update_progress)
         self._hd_worker.start()
+
+    def _hd_update_progress(self, count, msg):
+        self.hd_progress.setRange(0, 0)
+        self.hd_status.setText(_("Scanned: %s") % msg)
 
     def _hd_scan_done(self, results):
         self.hd_progress.hide()
