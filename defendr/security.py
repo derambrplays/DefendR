@@ -101,27 +101,62 @@ class FirewallManager(QtCore.QObject):
                                capture_output=True, text=True, timeout=5,
                                encoding="utf-8", errors="surrogateescape")
             for line in r.stdout.split("\n"):
-                if "DPT=5000" in line and "DROP" in line:
-                    parts = line.strip().split()
-                    if parts and parts[0].isdigit() and int(parts[0]) > 50:
-                        self.intrusion_signal.emit("HIGH", f"Port scan detected on port 5000: {parts[0]} dropped packets")
-                        return True
+                parts = line.strip().split()
+                if not parts or not parts[0].isdigit(): continue
+                pkts = int(parts[0])
+                if pkts <= 50: continue
+                if "DROP" in line:
+                    dport = "?"
+                    if "dpt:" in line.lower():
+                        for w in line.split():
+                            if w.lower().startswith("dpt:"):
+                                dport = w.split(":")[1]
+                                break
+                    src = "?"
+                    for i, w in enumerate(parts):
+                        if w == "DROP" and i > 2:
+                            src = parts[i-4] if i-4 >= 0 else "?"
+                            break
+                    self.intrusion_signal.emit("HIGH",
+                        f"Port scan: {pkts} pacotes DROP na porta {dport} de {src}")
+                    return True
         except Exception:
             pass
         return False
 
     def detect_brute_force(self):
         try:
-            r = subprocess.run(["journalctl", "-u", "defendr", "--since", "5 min ago", "-n", "50",
-                               "--no-pager"], capture_output=True, text=True, timeout=5,
-                               encoding="utf-8", errors="surrogateescape")
-            login_attempts = 0
-            for line in r.stdout.split("\n"):
-                if "login" in line.lower() and ("fail" in line.lower() or "invalid" in line.lower()):
-                    login_attempts += 1
-            if login_attempts > 10:
-                self.intrusion_signal.emit("MEDIUM", f"Possible brute force: {login_attempts} failed logins in 5 min")
-                return True
+            # Check connections to port 5000 as brute force indicator
+            try:
+                import psutil
+                conns = psutil.net_connections(kind="tcp")
+                from_counter = {}
+                for conn in conns:
+                    if conn.raddr and conn.laddr and conn.laddr.port == 5000:
+                        ip = conn.raddr.ip
+                        if ip not in ("127.0.0.1", "::1"):
+                            from_counter[ip] = from_counter.get(ip, 0) + 1
+                for ip, count in from_counter.items():
+                    if count > 10:
+                        self.intrusion_signal.emit("MEDIUM",
+                            f"Brute force: {count} conexoes de {ip} na porta 5000")
+                        return True
+            except Exception:
+                pass
+            # Fallback: check journalctl
+            try:
+                r = subprocess.run(["journalctl", "--since", "5 min ago", "-n", "100",
+                                   "--no-pager"], capture_output=True, text=True, timeout=5,
+                                   encoding="utf-8", errors="surrogateescape")
+                login_attempts = 0
+                for line in r.stdout.split("\n"):
+                    if "login" in line.lower() and ("fail" in line.lower() or "invalid" in line.lower()):
+                        login_attempts += 1
+                if login_attempts > 10:
+                    self.intrusion_signal.emit("MEDIUM", f"Brute force: {login_attempts} SSH/login failures in 5 min")
+                    return True
+            except Exception:
+                pass
         except Exception:
             pass
         return False

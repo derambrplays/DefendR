@@ -153,6 +153,70 @@ class SplashScreen(QtWidgets.QSplashScreen):
         self.setPixmap(pix)
         self.repaint()
 
+class IntrusionPopup(QtWidgets.QWidget):
+    def __init__(self, title, message, severity="HIGH", source_ip="", attack_type="", parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.Tool)
+        self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating)
+        self.setStyleSheet("background: transparent;")
+        self.setGeometry(0, 0, 500, 300)
+
+        colors = {"HIGH": ("#ff453a", "#ff3b30"), "MEDIUM": ("#ffd60a", "#ff9500"), "LOW": ("#30d158", "#34c759")}
+        main_color, accent = colors.get(severity, colors["HIGH"])
+
+        frame = QtWidgets.QFrame(self)
+        frame.setGeometry(10, 10, 480, 280)
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #2c2c2e, stop:1 #1c1c1e);
+                border: 2px solid {main_color};
+                border-radius: 16px;
+            }}
+        """)
+
+        icon = QtWidgets.QLabel("🛑", frame)
+        icon.setStyleSheet(f"font-size: 48px; background: transparent;")
+        icon.move(30, 30)
+        icon.resize(60, 60)
+
+        title_lbl = QtWidgets.QLabel(title, frame)
+        title_lbl.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {main_color}; background: transparent;")
+        title_lbl.move(100, 30)
+        title_lbl.resize(360, 30)
+
+        sev_lbl = QtWidgets.QLabel(f"[{severity}] {attack_type}", frame)
+        sev_lbl.setStyleSheet(f"font-size: 13px; color: {accent}; background: transparent; font-weight: 600;")
+        sev_lbl.move(100, 65)
+        sev_lbl.resize(360, 20)
+
+        msg_lbl = QtWidgets.QLabel(message, frame)
+        msg_lbl.setWordWrap(True)
+        msg_lbl.setStyleSheet(f"font-size: 12px; color: #f5f5f7; background: transparent; padding: 0px;")
+        msg_lbl.move(30, 120)
+        msg_lbl.resize(420, 80)
+
+        if source_ip:
+            ip_lbl = QtWidgets.QLabel(f"Origem: {source_ip}", frame)
+            ip_lbl.setStyleSheet(f"font-size: 11px; color: #8e8e93; background: transparent;")
+            ip_lbl.move(30, 200)
+            ip_lbl.resize(300, 20)
+
+        dismiss_btn = QtWidgets.QPushButton("Dismiss", frame)
+        dismiss_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {main_color}; color: white; border: none;
+                border-radius: 16px; padding: 8px 24px; font-size: 13px; font-weight: 600;
+            }}
+            QPushButton:hover {{ background: {accent}; }}
+        """)
+        dismiss_btn.move(380 - 140, 240)
+        dismiss_btn.resize(120, 32)
+        dismiss_btn.clicked.connect(self.close)
+
+        self.show()
+        QtCore.QTimer.singleShot(8000, self.close)
+
 class SidebarButton(QtWidgets.QPushButton):
     def __init__(self, text, icon_emoji=""):
         super().__init__(f"  {icon_emoji}  {text}")
@@ -210,10 +274,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.netmon = NetworkMonitor()
         self.netmon.alert_signal.connect(self._on_net_alert)
         self.netmon.data_signal.connect(self._on_net_data)
+        self.netmon.intrusion_signal.connect(self._on_net_intrusion)
         self.quarantine = QuarantineManager()
         self.rt_protector = RealTimeProtector(self.engine)
         self.rt_protector.alert_signal.connect(self._on_rt_alert)
         self.firewall = FirewallManager()
+        self.firewall.intrusion_signal.connect(lambda s, m: self._show_intrusion_popup(s, m, "Intrusao de Rede", ""))
         self.web_blocker = WebBlocker()
         self.anti_phish = AntiPhishing()
         self.sandbox = SandboxManager()
@@ -1642,6 +1708,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proc_timer = QtCore.QTimer()
         self.proc_timer.timeout.connect(self._refresh_procs)
         self.proc_timer.start(5000)
+        self.fw_detect_timer = QtCore.QTimer()
+        self.fw_detect_timer.timeout.connect(self._fw_detect_loop)
+        self.fw_detect_timer.start(8000)
         self._update_dns()
         self._refresh_procs()
         # Auto-start background protections
@@ -1763,6 +1832,18 @@ class MainWindow(QtWidgets.QMainWindow):
         ditem.setForeground(QtGui.QColor(color))
         self.alert_list.insertItem(0, ditem)
         if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
+        if level in ("HIGH", "CRITICAL"):
+            self._show_intrusion_popup(level, msg, "Alerta de Rede", "")
+
+    def _on_net_intrusion(self, severity, msg):
+        parts = msg.split("|")
+        message = parts[0] if len(parts) > 0 else msg
+        attack_type = parts[1] if len(parts) > 1 else "Ataque de Rede"
+        source_ip = parts[2] if len(parts) > 2 else ""
+        self._show_intrusion_popup(severity, message, attack_type, source_ip)
+        self.alert_list.insertItem(0, QtWidgets.QListWidgetItem(f"[{attack_type}] {message}"))
+        if self.alert_list.count() > 100:
+            self.alert_list.takeItem(self.alert_list.count()-1)
 
     def _on_net_data(self, data):
         if data.get("type") == "arp":
@@ -1850,6 +1931,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ap_result.setStyleSheet(f"font-size: 11px; color: {risk_color}; background: transparent; padding: 4px; border: 1px solid {BORDER}; border-radius: 4px;")
 
     # ===================== FIREWALL =====================
+    def _fw_detect_loop(self):
+        self.firewall.detect_port_scan()
+        self.firewall.detect_brute_force()
+
     def _fw_enable(self):
         ok, msg = self.firewall.enable()
         self.fw_status.setText(f"Firewall: {'Enabled' if ok else 'Error'}")
@@ -1953,6 +2038,17 @@ class MainWindow(QtWidgets.QMainWindow):
         for k, v in results.items():
             txt += f"\n{k}: {v}\n"
         self.rk_results.setPlainText(txt)
+
+    def _show_intrusion_popup(self, severity, msg, attack_type="", source_ip=""):
+        title = "🚨 Ameaca Detectada!" if severity == "HIGH" else "⚠ Alerta de Seguranca"
+        popup = IntrusionPopup(title, msg, severity, source_ip, attack_type, self)
+        popup.move(
+            self.x() + (self.width() - 500) // 2,
+            self.y() + 20
+        )
+        popup.show()
+        self.tray.showMessage(f"[{severity}] {attack_type or 'Intrusao'}", msg,
+                              QtWidgets.QSystemTrayIcon.Critical, 5000)
 
     def _on_rootkit_alert(self, level, msg):
         item = QtWidgets.QListWidgetItem(f"[{level}] {msg}")

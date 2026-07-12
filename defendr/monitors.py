@@ -7,6 +7,7 @@ from defendr.engine import DefendREngine
 class NetworkMonitor(QtCore.QObject):
     alert_signal = QtCore.pyqtSignal(str, str)
     data_signal = QtCore.pyqtSignal(object)
+    intrusion_signal = QtCore.pyqtSignal(str, str)
     def __init__(self):
         super().__init__()
         self.monitoring = False
@@ -14,6 +15,8 @@ class NetworkMonitor(QtCore.QObject):
         self.arp_changes = {}
         self.known_dns = set()
         self.gateway_ip = None
+        self._conn_history = {}
+        self._port_scan_alerted = set()
     def start(self):
         self.monitoring = True
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -23,7 +26,7 @@ class NetworkMonitor(QtCore.QObject):
     def _run(self):
         while self.monitoring:
             try:
-                self._check_arp(); self._check_ports(); self._check_dns(); self._check_connections()
+                self._check_arp(); self._check_ports(); self._check_dns(); self._check_connections(); self._check_port_scan()
                 time.sleep(5)
             except Exception: pass
     def _get_gateway(self):
@@ -88,22 +91,52 @@ class NetworkMonitor(QtCore.QObject):
             except (psutil.AccessDenied, PermissionError): return
             seen = set()
             for conn in conns:
-                if conn.status=="ESTABLISHED" and conn.raddr:
-                    ip,port=conn.raddr.ip,conn.raddr.port
-                    if port == 53: continue
-                    local_prefixes=("127.","10.","172.16.","172.17.","172.18.","172.19.",
-                        "172.20.","172.21.","172.22.","172.23.","172.24.","172.25.","172.26.","172.27.","172.28.","172.29.","172.30.","172.31.","192.168.","::1")
-                    if not any(ip.startswith(p) for p in local_prefixes):
-                        key = f"{ip}:{port}"
-                        if key in seen: continue
-                        seen.add(key)
-                        if port in {4444,5555,6666,1337,31337,12345,54321,22222}:
-                            pname="?"
-                            if conn.pid:
-                                try: pname=psutil.Process(conn.pid).name()
-                                except Exception: pass
-                            self.alert_signal.emit("LOW",f"Remote connection: {ip}:{port} ({pname})")
+                if not (conn.status == "ESTABLISHED" and conn.raddr): continue
+                ip,port=conn.raddr.ip,conn.raddr.port
+                if port == 53: continue
+                local_prefixes=("127.","10.","172.16.","172.17.","172.18.","172.19.",
+                    "172.20.","172.21.","172.22.","172.23.","172.24.","172.25.","172.26.","172.27.","172.28.","172.29.","172.30.","172.31.","192.168.","::1")
+                if any(ip.startswith(p) for p in local_prefixes): continue
+                key = f"{ip}:{port}"
+                if key in seen: continue
+                seen.add(key)
+                if port in {4444,5555,6666,1337,31337,12345,54321,22222}:
+                    pname="?"
+                    if conn.pid:
+                        try: pname=psutil.Process(conn.pid).name()
+                        except Exception: pass
+                    self._fire_intrusion("MEDIUM", f"Conexao suspeita: {ip}:{port} ({pname})", "Conexao Remota", ip)
         except Exception: pass
+
+    def _check_port_scan(self):
+        try:
+            import psutil
+            try: all_conns = psutil.net_connections(kind="tcp")
+            except (psutil.AccessDenied, PermissionError): return
+            now = time.time()
+            for conn in all_conns:
+                if not (conn.raddr and conn.status in ("SYN_SENT", "ESTABLISHED", "CLOSE_WAIT")): continue
+                ip = conn.raddr.ip
+                if ip in ("127.0.0.1", "::1"): continue
+                if ip not in self._conn_history:
+                    self._conn_history[ip] = {"ports": set(), "times": []}
+                self._conn_history[ip]["ports"].add(conn.raddr.port)
+                self._conn_history[ip]["times"].append(now)
+            clean = []
+            for ip, data in list(self._conn_history.items()):
+                data["times"] = [t for t in data["times"] if now - t < 10]
+                if len(data["times"]) > 20 and ip not in self._port_scan_alerted:
+                    self._port_scan_alerted.add(ip)
+                    self._fire_intrusion("HIGH", f"Port scan detectado de {ip}: {len(data['ports'])} portas em 10s", "Port Scan", ip)
+                if not data["times"]:
+                    clean.append(ip)
+            for ip in clean:
+                del self._conn_history[ip]
+        except Exception: pass
+
+    def _fire_intrusion(self, severity, msg, attack_type="", source_ip=""):
+        self.alert_signal.emit(severity, f"[{attack_type}] {msg}")
+        self.intrusion_signal.emit(severity, f"{msg}|{attack_type}|{source_ip}")
 
 class RealTimeProtector(QtCore.QObject):
     alert_signal = QtCore.pyqtSignal(str, str, str)
