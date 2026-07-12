@@ -334,6 +334,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self._setup_tray()
         self._start_monitors()
 
+    def _restart_app(self):
+        self.tray.showMessage("DefendR", "Reiniciando...", QtWidgets.QSystemTrayIcon.Information, 2000)
+        QtCore.QTimer.singleShot(500, lambda: (
+            self._cleanup_all(),
+            QtCore.QProcess.startDetached(sys.executable, sys.argv)
+        ))
+        QtCore.QTimer.singleShot(1000, QtWidgets.qApp.quit)
+
+    def _cleanup_all(self):
+        self.monitor_timer.stop()
+        self.proc_timer.stop()
+        if hasattr(self, 'fw_detect_timer'):
+            self.fw_detect_timer.stop()
+        self.firewall.disable()
+        self.engine.stop()
+        self.anti_ransomware.stop()
+
     def closeEvent(self, event):
         if self.game_mode.suppress_notifications():
             event.accept()
@@ -1682,6 +1699,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.su_results.setStyleSheet(f"background: {DARK_BG}; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 10px; font-size: 12px; font-family: 'SF Mono', 'Consolas', monospace; padding: 10px; max-height: 120px;")
         su_l.addWidget(self.su_results)
         gen_l.addWidget(su_frame)
+
+        # Restart button
+        restart_frame = QtWidgets.QFrame()
+        restart_frame.setStyleSheet(f"background: rgba(255,69,58,0.04); border: 1px solid {RED}; border-radius: 14px;")
+        restart_l = QtWidgets.QVBoxLayout(restart_frame)
+        restart_l.addWidget(QtWidgets.QLabel("Reiniciar DefendR"))
+        restart_l.addWidget(QtWidgets.QLabel("Reinicia o aplicativo para aplicar atualizacoes e correcoes"))
+        restart_l.addWidget(self._btn("🔄 Reiniciar Agora", self._restart_app, RED))
+        gen_l.addWidget(restart_frame)
         tabs.addTab(gen_w, "General")
 
         # Whitelist
