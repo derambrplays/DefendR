@@ -256,8 +256,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(_("DefendR - Advanced Protection"))
         self.setMinimumSize(1200, 750)
         self.resize(1300, 800)
+        icon_svg = os.path.join(os.path.dirname(__file__), "icon.svg")
         icon_path = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
-        if os.path.exists(icon_path): self.setWindowIcon(QtGui.QIcon(icon_path))
+        if os.path.exists(icon_svg):
+            self.setWindowIcon(QtGui.QIcon(icon_svg))
+        elif os.path.exists(icon_path):
+            self.setWindowIcon(QtGui.QIcon(icon_path))
 
         self._setup_ui()
         self._setup_tray()
@@ -273,8 +277,14 @@ class MainWindow(QtWidgets.QMainWindow):
                               QtWidgets.QSystemTrayIcon.Information, 2000)
 
     def _setup_tray(self):
+        icon_svg = os.path.join(os.path.dirname(__file__), "icon.svg")
         icon_path = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
-        icon = QtGui.QIcon(icon_path) if os.path.exists(icon_path) else QtGui.QIcon()
+        if os.path.exists(icon_svg):
+            icon = QtGui.QIcon(icon_svg)
+        elif os.path.exists(icon_path):
+            icon = QtGui.QIcon(icon_path)
+        else:
+            icon = QtGui.QIcon()
         self.tray = QtWidgets.QSystemTrayIcon(icon, self)
         self.tray.setToolTip(_("Protected by DefendR"))
         menu = QtWidgets.QMenu()
