@@ -5,6 +5,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from defendr.constants import *
 from defendr.engine import DefendREngine
 from defendr.monitors import NetworkMonitor, RealTimeProtector, AntiRansomware, WebcamProtector, USBScanner, GameMode
+from defendr.selfprotect import SelfProtection
 from defendr.security import FirewallManager, WebBlocker, AntiPhishing, SandboxManager, RootkitDetector
 from defendr.tools import DataShredder, SoftwareUpdater, CleanupManager, PasswordManager, VPNManager
 from defendr.network_tools import NetworkInspector, WiFiInspector, DNSOverHTTPS
@@ -349,6 +350,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cleanup_mgr.preview_signal.connect(self._on_cleanup_preview)
         self.telemetry = TelemetryClient()
         self.enterprise_mode = False
+        self.selfprotect = SelfProtection(os.getpid())
+        self.selfprotect.alert_signal.connect(self._on_selfprotect_alert)
 
         self.setWindowTitle(_("DefendR - Advanced Protection"))
         self.setMinimumSize(1200, 750)
@@ -405,6 +408,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, 'fw_detect_timer'):
             self.fw_detect_timer.stop()
         self.netmon.stop()
+        self.selfprotect.stop()
         self.firewall.disable()
         self.engine.stop()
         self.ransomware.stop()
@@ -1814,6 +1818,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fw_detect_timer.timeout.connect(self._fw_detect_loop)
         self.fw_detect_timer.start(3000)
         self.netmon.start()
+        self.selfprotect.start()
         self._update_dns()
         self._refresh_procs()
         # Auto-start background protections
@@ -2469,6 +2474,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.webcam_protector.start()
             self.wc_toggle.setText("⏹ Stop Webcam Monitor")
             self.wc_status.setText(_("Status: Active"))
+
+    def _on_selfprotect_alert(self, severity, msg):
+        self._show_intrusion_popup(severity, msg, "Auto-Defesa", "127.0.0.1")
 
     def _on_webcam_alert(self, level, msg):
         item = QtWidgets.QListWidgetItem(f"[WEBCAM][{level}] {msg}")
