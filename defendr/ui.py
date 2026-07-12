@@ -227,11 +227,11 @@ class IntrusionPopup(QtWidgets.QWidget):
         dismiss_btn.resize(28, 28)
         dismiss_btn.clicked.connect(self.close)
 
-        # Notification sound
+        # Notification sound (Avast-style alert)
         try:
             import subprocess
-            subprocess.run(["paplay", "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga"],
-                          capture_output=True, timeout=2)
+            snd = os.path.join(os.path.dirname(__file__), "alert.wav")
+            subprocess.run(["paplay", snd], capture_output=True, timeout=2)
         except Exception:
             QtWidgets.QApplication.beep()
 
