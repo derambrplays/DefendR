@@ -114,6 +114,7 @@ class RealTimeProtector(QtCore.QObject):
         self.watchdog = None
         self.observer = None
         self.watched_dirs = ["/tmp", os.path.expanduser("~/Downloads"),
+                             os.path.expanduser("~/Transferências"),
                              os.path.expanduser("~/Área de trabalho"),
                              os.path.expanduser("~/Desktop")]
         self._init_watchdog()
@@ -178,11 +179,14 @@ class AntiRansomware(QtCore.QObject):
         self.monitoring = False
     def _do_scan_ransomware(self):
         watch_dirs = [os.path.expanduser("~/Documents"),
+                      os.path.expanduser("~/Documentos"),
                       os.path.expanduser("~/Downloads"),
                       os.path.expanduser("~/Área de trabalho"),
                       os.path.expanduser("~/Desktop"),
                       os.path.expanduser("~/Pictures"),
-                      os.path.expanduser("~/Videos")]
+                      os.path.expanduser("~/Imagens"),
+                      os.path.expanduser("~/Videos"),
+                      os.path.expanduser("~/Vídeos")]
         encrypted_count = 0
         new_exts = {}
         for d in watch_dirs:
