@@ -678,11 +678,15 @@ class InstallPage(QtWidgets.QWizardPage):
             QtWidgets.QApplication.processEvents()
             icon_sizes = [16, 32, 48, 64, 256]
             svg_src = os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/defendr.svg")
+            splash_src = os.path.join(DEFENDR_DIR, "defendr", "splash.png")
             for size in icon_sizes:
                 dst = os.path.expanduser(f"~/.local/share/icons/hicolor/{size}x{size}/apps/defendr.png")
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 if os.path.exists(svg_src):
                     subprocess.run(["convert", "-background", "none", "-resize", f"{size}x{size}", svg_src, dst],
+                                   capture_output=True, timeout=30)
+                elif os.path.exists(splash_src):
+                    subprocess.run(["convert", splash_src, "-resize", f"{size}x{size}", dst],
                                    capture_output=True, timeout=30)
             self.progress.setValue(25)
             QtWidgets.QApplication.processEvents()
