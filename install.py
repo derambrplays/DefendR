@@ -1,13 +1,66 @@
 #!/usr/bin/env python3
 """DefendR Installer Wizard - 7 Languages"""
 
-import os, sys, subprocess, shutil
+import os, sys, subprocess, shutil, configparser
 
 LANG = {}
 ICON_SRC = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
 DEFENDR_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFENDR_SCRIPT = os.path.join(DEFENDR_DIR, "defendr.py")
 SPLASH_PATH = os.path.join(DEFENDR_DIR, "defendr", "splash.png")
+
+def detect_pkg_manager():
+    for cmd in ["apt-get", "dnf", "pacman", "zypper", "yum", "apk", "xbps-install"]:
+        if shutil.which(cmd):
+            return cmd
+    return "apt-get"
+
+def pkg_install_cmd(pkg_manager, pkgs):
+    if pkg_manager in ("apt-get", "apt"):
+        return ["sudo", pkg_manager, "install", "-y"] + pkgs
+    elif pkg_manager == "dnf":
+        return ["sudo", "dnf", "install", "-y"] + pkgs
+    elif pkg_manager == "pacman":
+        return ["sudo", "pacman", "-S", "--noconfirm"] + pkgs
+    elif pkg_manager == "zypper":
+        return ["sudo", "zypper", "install", "-y"] + pkgs
+    elif pkg_manager == "yum":
+        return ["sudo", "yum", "install", "-y"] + pkgs
+    elif pkg_manager == "apk":
+        return ["sudo", "apk", "add"] + pkgs
+    elif pkg_manager == "xbps-install":
+        return ["sudo", "xbps-install", "-y"] + pkgs
+    return ["sudo", "apt", "install", "-y"] + pkgs
+
+def get_desktop_dir():
+    user_dirs = os.path.expanduser("~/.config/user-dirs.dirs")
+    if os.path.exists(user_dirs):
+        cp = configparser.ConfigParser()
+        try:
+            cp.read(user_dirs)
+            val = cp.get("User Dirs", "XDG_DESKTOP_DIR", fallback="").strip('"')
+            if val:
+                return os.path.expandvars(val)
+        except Exception:
+            pass
+    for d in [os.path.expanduser("~/Área de trabalho"), os.path.expanduser("~/Desktop"),
+              os.path.expanduser("~/桌面"), os.path.expanduser("~/Escritorio")]:
+        if os.path.isdir(d):
+            return d
+    return os.path.expanduser("~/Desktop")
+
+def get_pyqt_pkg(pkg_manager):
+    mapping = {
+        "apt-get": "python3-pyqt5",
+        "apt": "python3-pyqt5",
+        "dnf": "python3-qt5",
+        "pacman": "python-pyqt5",
+        "zypper": "python3-qt5",
+        "yum": "python3-qt5",
+        "apk": "py3-pyqt5",
+        "xbps-install": "python3-PyQt5",
+    }
+    return mapping.get(pkg_manager, "python3-pyqt5")
 
 LANGS = {
     "pt": {
@@ -710,9 +763,7 @@ StartupNotify=true
             QtWidgets.QApplication.processEvents()
 
             self.log.append(_("installing_desktop2"))
-            desk_dir = os.path.expanduser("~/Área de trabalho")
-            if not os.path.isdir(desk_dir):
-                desk_dir = os.path.expanduser("~/Desktop")
+            desk_dir = get_desktop_dir()
             desk_path = os.path.join(desk_dir, "defendr.desktop")
             # Update desktop_entry with full icon path and working dir
             desktop_entry = f"""[Desktop Entry]
@@ -758,7 +809,8 @@ StartupNotify=true
                     if not ok: to_install.append(pkg)
                 if to_install:
                     self.log.append(f"  Instalando: {' '.join(to_install)}")
-                    r = run_with_sudo(["apt", "install", "-y"] + to_install)
+                    pm = detect_pkg_manager()
+                    r = run_with_sudo(pkg_install_cmd(pm, to_install))
                     if r.returncode != 0:
                         self.log.append(f"  ⚠ {_('err_sudo_install')} {' '.join(to_install)}")
                     else:
@@ -825,7 +877,9 @@ def main():
     global HAS_PYQT
     if not HAS_PYQT:
         print("PyQt5 nao encontrado. Tentando instalar automaticamente...")
-        r = subprocess.run(["sudo", "apt", "install", "-y", "python3-pyqt5"],
+        pm = detect_pkg_manager()
+        pyqt_pkg = get_pyqt_pkg(pm)
+        r = subprocess.run(pkg_install_cmd(pm, [pyqt_pkg]),
                            capture_output=True, text=True)
         if r.returncode == 0:
             print("PyQt5 instalado com sucesso!")
@@ -839,7 +893,7 @@ def main():
                 sys.exit(1)
         else:
             print("Falha ao instalar PyQt5. Instale manualmente:")
-            print("  sudo apt install python3-pyqt5")
+            print(f"  Comando: {' '.join(pkg_install_cmd(pm, [pyqt_pkg]))}")
             if r.stderr:
                 print(f"Erro: {r.stderr}")
             sys.exit(1)
