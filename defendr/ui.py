@@ -46,11 +46,19 @@ class ScanWorker(QtCore.QThread):
 
     def run(self):
         try:
-            if self.mode == "completo":
-                result = self.engine.scan_completo(self.path, exclude_extra=["/mnt"])
-            else:
-                result = self.engine.scan_rapido(self.path, exclude_extra=["/mnt"])
-            self.finished.emit(result)
+            paths = self.path if isinstance(self.path, list) else [self.path]
+            combined = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
+            for path in paths:
+                if self.mode == "completo":
+                    result = self.engine.scan_completo(path)
+                else:
+                    result = self.engine.scan_rapido(path)
+                combined["malicious"].extend(result.get("malicious", []))
+                combined["suspicious"].extend(result.get("suspicious", []))
+                combined["pentest"].extend(result.get("pentest", []))
+                combined["safe"] += result.get("safe", 0)
+                combined["errors"].extend(result.get("errors", []))
+            self.finished.emit(combined)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -1299,8 +1307,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hd_ball_btn.setEnabled(False)
         label = _("Quick scan in progress...") if self.hd_mode == "rapido" else _("Full scan in progress...")
         self.hd_status.setText(label)
-        scan_path = "/home" if self.hd_mode == "rapido" else "/"
-        self._hd_worker = ScanWorker(self.engine, scan_path, mode=self.hd_mode)
+        paths = ["/"]
+        try:
+            import psutil, os
+            seen = set()
+            for p in psutil.disk_partitions():
+                if p.fstype in ("proc", "sysfs", "tmpfs", "devtmpfs", "devpts",
+                                "cgroup2", "cgroup", "pstore", "efivarfs",
+                                "fusectl", "securityfs", "selinuxfs",
+                                "debugfs", "tracefs", "hugetlbfs", "mqueue",
+                                "configfs", "bpf", "bpf_fs"):
+                    continue
+                seen.add(p.mountpoint)
+            # If "/" is mounted, scanning it covers everything (rglob walks into all sub-mounts)
+            paths = ["/"] if "/" in seen else list(seen)
+        except Exception:
+            pass
+        self._hd_worker = ScanWorker(self.engine, paths, mode=self.hd_mode)
         self._hd_worker.finished.connect(self._hd_scan_done)
         self._hd_worker.start()
 
@@ -1342,13 +1365,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hd_recs_list.addItem(_("🔄 Signatures: keep DefendR updated for best detection"))
         try:
             import psutil
-            du = psutil.disk_usage("/mnt/defendr")
-            pct = du.used / du.total * 100
-            self.hd_recs_list.addItem(_("📊 /mnt/defendr: %dGB / %dGB (%d%% used)") % (du.used//(1024**3), du.total//(1024**3), pct))
-            if pct > 90:
-                self.hd_recs_list.addItem(_("🔴 WARNING: Disk almost full - free up space"))
-            elif pct > 75:
-                self.hd_recs_list.addItem(_("🟡 Disk usage above 75% - consider cleanup"))
+            for part in psutil.disk_partitions():
+                if part.fstype in ("proc", "sysfs", "tmpfs", "devtmpfs", "devpts",
+                                   "cgroup2", "cgroup", "pstore", "efivarfs",
+                                   "fusectl", "securityfs", "selinuxfs",
+                                   "debugfs", "tracefs", "hugetlbfs", "mqueue",
+                                   "configfs", "bpf", "bpf_fs"):
+                    continue
+                try:
+                    du = psutil.disk_usage(part.mountpoint)
+                    pct = du.used / du.total * 100
+                    self.hd_recs_list.addItem(_("📊 %s: %dGB / %dGB (%d%% used)") % (
+                        part.mountpoint, du.used//(1024**3), du.total//(1024**3), pct))
+                    if pct > 90:
+                        self.hd_recs_list.addItem(_("🔴 WARNING: %s almost full - free up space") % part.mountpoint)
+                    elif pct > 75:
+                        self.hd_recs_list.addItem(_("🟡 %s above 75%% - consider cleanup") % part.mountpoint)
+                except Exception:
+                    pass
         except Exception:
             pass
         if self.telemetry.is_registered():
