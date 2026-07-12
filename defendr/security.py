@@ -1,5 +1,5 @@
 # Security tools: firewall, web blocker, anti-phishing, sandbox, rootkit detector
-import os, subprocess, re, shutil, socket, shlex, json
+import os, subprocess, re, shutil, socket, shlex, json, time
 from defendr.filelock import file_lock, safe_json_read, safe_json_write
 from PyQt5 import QtCore
 from defendr.constants import *

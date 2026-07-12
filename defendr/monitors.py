@@ -18,11 +18,16 @@ class NetworkMonitor(QtCore.QObject):
         self._conn_history = {}
         self._port_scan_alerted = set()
     def start(self):
+        if getattr(self, 'thread', None) and self.thread.is_alive():
+            self.monitoring = False
+            self.thread.join(timeout=3)
         self.monitoring = True
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
     def stop(self):
         self.monitoring = False
+        if getattr(self, 'thread', None):
+            self.thread.join(timeout=2)
     def _run(self):
         while self.monitoring:
             try:

@@ -404,9 +404,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proc_timer.stop()
         if hasattr(self, 'fw_detect_timer'):
             self.fw_detect_timer.stop()
+        self.netmon.stop()
         self.firewall.disable()
         self.engine.stop()
-        self.anti_ransomware.stop()
+        self.ransomware.stop()
 
     def closeEvent(self, event):
         if self.game_mode.suppress_notifications():
@@ -458,10 +459,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _quit_app(self):
         self.netmon.stop(); self.rt_protector.stop(); self.ransomware.stop()
-        self.usb_scanner.stop(); self.game_mode.stop(); self.webcam_protector.stop()
+        self.usb_scanner.stop(); self.game_mode.stop()
+        if hasattr(self, 'webcam_protector'): self.webcam_protector.stop()
         self.engine.scanning = False
         self.monitor_timer.stop()
         self.proc_timer.stop()
+        if hasattr(self, 'fw_detect_timer'): self.fw_detect_timer.stop()
+        self.firewall.disable()
         self.hide(); self.tray.hide()
         QtCore.QTimer.singleShot(100, QtWidgets.QApplication.quit)
 
@@ -1931,8 +1935,6 @@ class MainWindow(QtWidgets.QMainWindow):
         ditem.setForeground(QtGui.QColor(color))
         self.alert_list.insertItem(0, ditem)
         if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
-        if level in ("HIGH", "CRITICAL"):
-            self._show_intrusion_popup(level, msg, "Alerta de Rede", "")
 
     def _on_net_intrusion(self, severity, msg):
         parts = msg.split("|")
@@ -2448,8 +2450,8 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             result = self.rootkit.full_scan()
             if result:
-                for severity, msg in result:
-                    self.rootkit.alert_signal.emit(severity, msg)
+                for key, msg in result.items():
+                    self.rootkit.alert_signal.emit("HIGH", msg)
                     self.alert_list.insertItem(0, QtWidgets.QListWidgetItem(f"[ROOTKIT] {msg}"))
         except Exception:
             pass
