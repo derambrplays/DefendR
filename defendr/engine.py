@@ -29,10 +29,14 @@ def _shannon_entropy(data):
     return entropy
 
 
-def _file_walk(path):
+def _file_walk(path, exclude=None):
+    exclude = exclude or []
     p = Path(path)
     if p.is_dir():
-        yield from p.rglob("*")
+        for f in p.rglob("*"):
+            if any(str(f).startswith(e) for e in exclude):
+                continue
+            yield f
     else:
         yield p
 
@@ -135,21 +139,22 @@ class DefendREngine:
                 progress_cb(100, "Done")
         return results
 
-    def scan_rapido(self, path, progress_cb=None, result_cb=None):
-        return self._scan_with_patterns(path, progress_cb, result_cb)
+    def scan_rapido(self, path, progress_cb=None, result_cb=None, exclude_extra=None):
+        return self._scan_with_patterns(path, progress_cb, result_cb, exclude_extra=exclude_extra)
 
-    def scan_completo(self, path, progress_cb=None, result_cb=None):
-        results = self._scan_with_patterns(path, progress_cb, result_cb)
+    def scan_completo(self, path, progress_cb=None, result_cb=None, exclude_extra=None):
+        results = self._scan_with_patterns(path, progress_cb, result_cb, exclude_extra=exclude_extra)
         vt_key = os.environ.get("VT_API_KEY") or ""
         if vt_key:
             self._check_virustotal(results, vt_key)
         return results
 
-    def _scan_with_patterns(self, path, progress_cb=None, result_cb=None):
+    def _scan_with_patterns(self, path, progress_cb=None, result_cb=None, exclude_extra=None):
         self.scanning = True
         results = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
         try:
-            files = list(_file_walk(path))
+            exclude = list(SYSTEM_PATHS) + (exclude_extra or [])
+            files = list(_file_walk(path, exclude=exclude))
             total = len(files)
             lock = threading.Lock()
             all_pats = self.malware_patterns + self._clamav_patterns + self._remote_patterns

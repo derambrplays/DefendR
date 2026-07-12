@@ -47,9 +47,9 @@ class ScanWorker(QtCore.QThread):
     def run(self):
         try:
             if self.mode == "completo":
-                result = self.engine.scan_completo(self.path)
+                result = self.engine.scan_completo(self.path, exclude_extra=["/mnt"])
             else:
-                result = self.engine.scan_rapido(self.path)
+                result = self.engine.scan_rapido(self.path, exclude_extra=["/mnt"])
             self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
@@ -1299,7 +1299,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hd_ball_btn.setEnabled(False)
         label = _("Quick scan in progress...") if self.hd_mode == "rapido" else _("Full scan in progress...")
         self.hd_status.setText(label)
-        self._hd_worker = ScanWorker(self.engine, "/mnt/defendr", mode=self.hd_mode)
+        scan_path = "/home" if self.hd_mode == "rapido" else "/"
+        self._hd_worker = ScanWorker(self.engine, scan_path, mode=self.hd_mode)
         self._hd_worker.finished.connect(self._hd_scan_done)
         self._hd_worker.start()
 
