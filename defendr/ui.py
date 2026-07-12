@@ -6,6 +6,7 @@ from defendr.constants import *
 from defendr.engine import DefendREngine
 from defendr.monitors import NetworkMonitor, RealTimeProtector, AntiRansomware, WebcamProtector, USBScanner, GameMode
 from defendr.selfprotect import SelfProtection
+from defendr.advanced_protection import AdvancedProtection
 from defendr.security import FirewallManager, WebBlocker, AntiPhishing, SandboxManager, RootkitDetector
 from defendr.tools import DataShredder, SoftwareUpdater, CleanupManager, PasswordManager, VPNManager
 from defendr.network_tools import NetworkInspector, WiFiInspector, DNSOverHTTPS
@@ -352,6 +353,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.enterprise_mode = False
         self.selfprotect = SelfProtection(os.getpid())
         self.selfprotect.alert_signal.connect(self._on_selfprotect_alert)
+        self.adv_protection = AdvancedProtection()
+        self.adv_protection.alert_signal.connect(self._on_adv_alert)
 
         self.setWindowTitle(_("DefendR - Advanced Protection"))
         self.setMinimumSize(1200, 750)
@@ -409,6 +412,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.fw_detect_timer.stop()
         self.netmon.stop()
         self.selfprotect.stop()
+        self.adv_protection.stop()
         self.rt_protector.stop()
         self.usb_scanner.stop()
         self.game_mode.stop()
@@ -469,6 +473,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.usb_scanner.stop(); self.game_mode.stop()
         if hasattr(self, 'webcam_protector'): self.webcam_protector.stop()
         self.selfprotect.stop()
+        self.adv_protection.stop()
         self.engine.scanning = False
         self.monitor_timer.stop()
         self.proc_timer.stop()
@@ -689,7 +694,8 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_layout = QtWidgets.QHBoxLayout(btn_frame)
         for text, handler in [("📁 Scan File", self._scan_file),("📂 Scan Folder", self._scan_dir),
                                ("⏹ Stop", self._stop_scan),("🗑 Clear", self._clear_scan),
-                               ("📀 Scan USB", self._scan_usb_manual)]:
+                               ("📀 Scan USB", self._scan_usb_manual),
+                               ("🧪 Sandbox", self._run_selected_in_sandbox)]:
             btn_layout.addWidget(self._btn(text, handler))
         btn_layout.addStretch()
         layout.addWidget(btn_frame)
@@ -719,6 +725,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_tree.setHeaderLabels([_("Risk"), _("File"), _("Reason")])
         self.scan_tree.setColumnWidth(0,90); self.scan_tree.setColumnWidth(2,250)
         self.scan_tree.setStyleSheet(f"QTreeWidget {{ background: rgba(36,36,38,0.6); border: 1px solid {BORDER}; border-radius: 10px; color: {TEXT}; font-size: 12px; }} QTreeWidget::item {{ padding: 6px 8px; border-bottom: 1px solid {DARK_MID}; }} QHeaderView::section {{ background: rgba(44,44,46,0.8); color: {ACCENT_LIGHT}; border: none; padding: 6px 8px; font-size: 12px; font-weight: 600; }}")
+        self.scan_tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.scan_tree.customContextMenuRequested.connect(lambda pos: self._scan_tree_context_menu(pos))
         layout.addWidget(self.scan_tree, 1)
         self.content_stack.addWidget(w)
 
@@ -1823,6 +1831,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fw_detect_timer.start(3000)
         self.netmon.start()
         self.selfprotect.start()
+        self.adv_protection.start()
         self._update_dns()
         self._refresh_procs()
         # Auto-start background protections
@@ -1920,6 +1929,35 @@ class MainWindow(QtWidgets.QMainWindow):
     def _clear_scan(self):
         self.scan_tree.clear()
         self.scan_status.setText(_("Ready"))
+
+    def _scan_tree_context_menu(self, pos):
+        item = self.scan_tree.itemAt(pos)
+        if not item:
+            return
+        path = item.toolTip(1)
+        if not path or not os.path.isfile(path):
+            return
+        menu = QtWidgets.QMenu()
+        act = menu.addAction("🧪 Executar em Sandbox")
+        act.triggered.connect(lambda: self._run_sandbox_file(path))
+        menu.exec_(self.scan_tree.viewport().mapToGlobal(pos))
+
+    def _run_sandbox_file(self, path):
+        ok, msg = self.adv_protection.run_sandboxed(path)
+        self._show_msg(msg)
+        if ok and self.adv_protection.sandbox_available():
+            self._show_intrusion_popup("LOW", f"Sandbox: {msg}", "Protecao Avancada", "127.0.0.1")
+
+    def _run_selected_in_sandbox(self):
+        item = self.scan_tree.currentItem()
+        if not item:
+            self._show_msg("Selecione um arquivo na lista")
+            return
+        path = item.toolTip(1)
+        if not path or not os.path.isfile(path):
+            self._show_msg("Arquivo nao encontrado")
+            return
+        self._run_sandbox_file(path)
 
     # ===================== NETWORK =====================
     def _toggle_net(self):
@@ -2481,6 +2519,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_selfprotect_alert(self, severity, msg):
         self._show_intrusion_popup(severity, msg, "Auto-Defesa", "127.0.0.1")
+
+    def _on_adv_alert(self, severity, msg):
+        self._show_intrusion_popup(severity, msg, "Protecao Avancada", "127.0.0.1")
 
     def _on_webcam_alert(self, level, msg):
         item = QtWidgets.QListWidgetItem(f"[WEBCAM][{level}] {msg}")
