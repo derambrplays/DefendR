@@ -714,6 +714,19 @@ StartupNotify=true
             if not os.path.isdir(desk_dir):
                 desk_dir = os.path.expanduser("~/Desktop")
             desk_path = os.path.join(desk_dir, "defendr.desktop")
+            # Update desktop_entry with full icon path and working dir
+            desktop_entry = f"""[Desktop Entry]
+Version=1.0
+Name=DefendR
+Comment=Advanced Antivirus & Security Suite
+Exec={sys.executable} {DEFENDR_SCRIPT}
+Icon={os.path.expanduser('~/.local/share/icons/hicolor/256x256/apps/defendr.png')}
+Path={DEFENDR_DIR}
+Terminal=false
+Type=Application
+Categories=Security;Utility;
+StartupNotify=true
+"""
             os.makedirs(os.path.dirname(desk_path), exist_ok=True)
             with open(desk_path, "w") as f: f.write(desktop_entry)
             os.chmod(desk_path, 0o755)
