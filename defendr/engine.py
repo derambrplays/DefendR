@@ -14,6 +14,7 @@ from defendr.constants import (
 )
 from defendr.clamav_sigs import load_clamav_patterns
 from defendr.filelock import safe_json_read, safe_json_write
+from defendr.lang import _
 
 SIGNATURE_DB_URL = "https://raw.githubusercontent.com/derambrplays/DefendR/main/signatures.json"
 SIGNATURE_DB_PATH = os.path.join(CONFIG_DIR, "signatures.json")
@@ -170,13 +171,39 @@ class DefendREngine:
             self._check_virustotal(results, vt_key)
         return results
 
+    def _count_files(self, path, exclude):
+        total = 0
+        try:
+            for root, dirs, files in os.walk(path, followlinks=False):
+                if not self.scanning:
+                    return -1
+                root_s = root + "/"
+                if any(root_s.startswith(e) or root == e for e in exclude):
+                    dirs[:] = []
+                    continue
+                dirs[:] = [d for d in dirs if not any(
+                    os.path.join(root, d).startswith(e) for e in exclude)]
+                total += len(files)
+        except Exception:
+            pass
+        return total
+
     def _scan_with_patterns(self, path, progress_cb=None, result_cb=None, exclude_extra=None):
         self.scanning = True
         results = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
+        scanned = 0
         try:
             exclude = list(SYSTEM_PATHS) + (exclude_extra or [])
             lock = threading.Lock()
             all_pats = self.malware_patterns + self._clamav_patterns + self._remote_patterns
+
+            if progress_cb:
+                progress_cb(-1, _("Counting files..."))
+            total = self._count_files(path, exclude)
+            if total < 0:
+                return results
+            if progress_cb:
+                progress_cb(0, "0%% (0/%d)" % total)
 
             def scan_one(f):
                 try:
@@ -204,17 +231,22 @@ class DefendREngine:
                     if len(futs) >= 500:
                         for done in concurrent.futures.as_completed(futs):
                             scanned += 1
-                            if progress_cb and scanned % 200 == 0:
-                                progress_cb(scanned, f"{scanned}")
+                            if progress_cb and scanned % 100 == 0:
+                                pct = int(scanned * 100 / total) if total > 0 else 0
+                                progress_cb(pct, "%d%% (%d/%d)" % (pct, scanned, total))
                         futs = []
                 for done in concurrent.futures.as_completed(futs):
                     scanned += 1
-                    if progress_cb and scanned % 200 == 0:
-                        progress_cb(scanned, f"{scanned}")
+                    if progress_cb and scanned % 100 == 0:
+                        pct = int(scanned * 100 / total) if total > 0 else 0
+                        progress_cb(pct, "%d%% (%d/%d)" % (pct, scanned, total))
+                if progress_cb and scanned > 0:
+                    pct = int(scanned * 100 / total) if total > 0 else 0
+                    progress_cb(pct, "%d%% (%d/%d)" % (pct, scanned, total))
         finally:
             self.scanning = False
             if progress_cb:
-                progress_cb(scanned, f"Done - {scanned}")
+                progress_cb(100, "Done - %d files" % scanned)
         return results
 
     def _scan_rapido_file(self, fpath, all_pats):

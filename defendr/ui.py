@@ -1200,6 +1200,8 @@ class MainWindow(QtWidgets.QMainWindow):
         ball_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 16px;")
         ball_l = QtWidgets.QVBoxLayout(ball_frame)
         ball_l.setAlignment(QtCore.Qt.AlignCenter)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setAlignment(QtCore.Qt.AlignCenter)
         self.hd_ball_btn = QtWidgets.QPushButton()
         self.hd_ball_btn.setFixedSize(120, 120)
         self.hd_ball_btn.setCursor(QtCore.Qt.PointingHandCursor)
@@ -1224,15 +1226,39 @@ class MainWindow(QtWidgets.QMainWindow):
         """)
         self.hd_ball_btn.setText("▶")
         self.hd_ball_btn.clicked.connect(self._hd_start_scan)
-        ball_l.addWidget(self.hd_ball_btn)
+        btn_row.addWidget(self.hd_ball_btn)
+        self.hd_stop_btn = QtWidgets.QPushButton("■")
+        self.hd_stop_btn.setFixedSize(90, 90)
+        self.hd_stop_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.hd_stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: qradialgradient(cx:0.4, cy:0.4, radius:0.5,
+                    stop:0 #ff6b6b, stop:0.6 #e03131, stop:1 #c92a2a);
+                border: 3px solid #ff8787;
+                border-radius: 45px;
+                font-size: 32px;
+                color: white;
+            }}
+            QPushButton:hover {{
+                border-color: white;
+                background: qradialgradient(cx:0.4, cy:0.4, radius:0.5,
+                    stop:0 #ff8787, stop:0.6 #e03131, stop:1 #c92a2a);
+            }}
+        """)
+        self.hd_stop_btn.hide()
+        self.hd_stop_btn.clicked.connect(self._hd_stop_scan)
+        btn_row.addSpacing(10)
+        btn_row.addWidget(self.hd_stop_btn)
+        ball_l.addLayout(btn_row)
         self.hd_ball_label = QtWidgets.QLabel(_("Click to scan your HD"))
         self.hd_ball_label.setStyleSheet(f"font-size: 14px; color: {ACCENT_LIGHT}; background: transparent;")
         self.hd_ball_label.setAlignment(QtCore.Qt.AlignCenter)
         ball_l.addWidget(self.hd_ball_label)
         layout.addWidget(ball_frame, 0, QtCore.Qt.AlignCenter)
         self.hd_progress = QtWidgets.QProgressBar()
-        self.hd_progress.setStyleSheet(f"QProgressBar {{ background: rgba(44,44,46,0.6); border: none; border-radius: 8px; height: 8px; text-align: center; font-size: 10px; color: {TEXT}; }} QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 {ACCENT},stop:1 {ACCENT_LIGHT}); border-radius: 8px; }}")
+        self.hd_progress.setStyleSheet(f"QProgressBar {{ background: rgba(44,44,46,0.6); border: none; border-radius: 8px; height: 14px; text-align: center; font-size: 10px; color: {TEXT}; }} QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 {ACCENT},stop:1 {ACCENT_LIGHT}); border-radius: 8px; }}")
         self.hd_progress.hide()
+        self.hd_progress.setTextVisible(True)
         layout.addWidget(self.hd_progress)
         self.hd_status = QtWidgets.QLabel(_("Ready"))
         self.hd_status.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
@@ -1302,13 +1328,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 QPushButton:hover {{ border-color: white; }}
             """)
 
+    def _hd_stop_scan(self):
+        self.engine.scanning = False
+        self.hd_stop_btn.setEnabled(False)
+        self.hd_status.setText(_("Stopping scan..."))
+
     def _hd_start_scan(self):
         self.hd_results_tree.clear()
         self.hd_recs_list.clear()
         self.hd_progress.setValue(0)
+        self.hd_progress.setFormat("")
         self.hd_progress.show()
         self.hd_ball_btn.setText("⏳")
         self.hd_ball_btn.setEnabled(False)
+        self.hd_stop_btn.show()
+        self.hd_stop_btn.setEnabled(True)
         label = _("Quick scan in progress...") if self.hd_mode == "rapido" else _("Full scan in progress...")
         self.hd_status.setText(label)
         paths = ["/"]
@@ -1323,7 +1357,6 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "configfs", "bpf", "bpf_fs"):
                     continue
                 seen.add(p.mountpoint)
-            # If "/" is mounted, scanning it covers everything (rglob walks into all sub-mounts)
             paths = ["/"] if "/" in seen else list(seen)
         except Exception:
             pass
@@ -1332,12 +1365,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hd_worker.progress.connect(self._hd_update_progress)
         self._hd_worker.start()
 
-    def _hd_update_progress(self, count, msg):
-        self.hd_progress.setRange(0, 0)
-        self.hd_status.setText(_("Scanned: %s") % msg)
+    def _hd_update_progress(self, pct, msg):
+        if pct >= 0:
+            self.hd_progress.setRange(0, 100)
+            self.hd_progress.setValue(min(pct, 100))
+            self.hd_progress.setFormat(f"{min(pct, 100)}%")
+        else:
+            self.hd_progress.setRange(0, 0)
+            self.hd_progress.setFormat("")
+        self.hd_status.setText(msg)
 
     def _hd_scan_done(self, results):
         self.hd_progress.hide()
+        self.hd_stop_btn.hide()
         self.hd_ball_btn.setText("✓")
         self.hd_ball_btn.setEnabled(True)
         malicious = len(results["malicious"])
