@@ -749,7 +749,7 @@ class InstallPage(QtWidgets.QWizardPage):
 Name=DefendR
 Comment=Advanced Antivirus & Security Suite
 Exec={sys.executable} {DEFENDR_SCRIPT}
-Icon=defendr
+Icon={os.path.expanduser('~/.local/share/icons/hicolor/scalable/apps/defendr.svg')}
 Terminal=false
 Type=Application
 Categories=Security;Utility;
@@ -787,7 +787,7 @@ StartupNotify=true
 Name=DefendR (Root)
 Comment=DefendR Antivirus (with root privileges)
 Exec=pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY {sys.executable} {DEFENDR_SCRIPT}
-Icon=defendr
+Icon={os.path.expanduser('~/.local/share/icons/hicolor/scalable/apps/defendr.svg')}
 Terminal=false
 Type=Application
 Categories=Security;Utility;
