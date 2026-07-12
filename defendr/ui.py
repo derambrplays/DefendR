@@ -1809,6 +1809,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fw_detect_timer = QtCore.QTimer()
         self.fw_detect_timer.timeout.connect(self._fw_detect_loop)
         self.fw_detect_timer.start(3000)
+        self.netmon.start()
         self._update_dns()
         self._refresh_procs()
         # Auto-start background protections
