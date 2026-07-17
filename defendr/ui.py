@@ -1133,7 +1133,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._page_header(layout, _("🛡  Real-Time Protection"), "File system monitoring + Anti-Ransomware + Web Blocker + Anti-Phishing")
 
         # RT toggle
-        rt_frame = QtWidgets.QFrame()
+        self.rt_frame = QtWidgets.QFrame()
+        rt_frame = self.rt_frame
         rt_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
         rt_l = QtWidgets.QVBoxLayout(rt_frame)
         rt_l.addWidget(QtWidgets.QLabel("File System Monitor"))
@@ -1146,7 +1147,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(rt_frame)
 
         # Ransomware
-        rw_frame = QtWidgets.QFrame()
+        self.rw_frame = QtWidgets.QFrame()
+        rw_frame = self.rw_frame
         rw_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
         rw_l = QtWidgets.QVBoxLayout(rw_frame)
         rw_l.addWidget(QtWidgets.QLabel("Anti-Ransomware"))
@@ -1159,7 +1161,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(rw_frame)
 
         # Webcam Protection
-        wc_frame = QtWidgets.QFrame()
+        self.wc_frame = QtWidgets.QFrame()
+        wc_frame = self.wc_frame
         wc_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
         wc_l = QtWidgets.QVBoxLayout(wc_frame)
         wc_l.addWidget(QtWidgets.QLabel("Webcam Protection"))
@@ -3386,7 +3389,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.wc_block_btn, self.wc_unblock_btn, self.net_toggle):
                 try: btn.setEnabled(False)
                 except AttributeError: pass
-            for f in (self.fw_frame, self.port_frame, self.net_toggle_frame):
+            for f in (self.rt_frame, self.rw_frame, self.wc_frame,
+                      self.fw_frame, self.port_frame, self.net_toggle_frame):
                 try: f.hide()
                 except AttributeError: pass
             if hasattr(self, 'protect_cb'):
@@ -3460,7 +3464,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.wc_block_btn, self.wc_unblock_btn, self.net_toggle):
             try: btn.setEnabled(True)
             except AttributeError: pass
-        for f in (self.fw_frame, self.port_frame, self.net_toggle_frame):
+        for f in (self.rt_frame, self.rw_frame, self.wc_frame,
+                  self.fw_frame, self.port_frame, self.net_toggle_frame):
             try: f.show()
             except AttributeError: pass
         if hasattr(self, 'protect_cb'):
