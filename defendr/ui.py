@@ -1239,7 +1239,8 @@ class MainWindow(QtWidgets.QMainWindow):
             layout.addWidget(QtWidgets.QLabel("⚠ iptables not available. Run with sudo."))
             self.content_stack.addWidget(w); return
 
-        fw_frame = QtWidgets.QFrame()
+        self.fw_frame = QtWidgets.QFrame()
+        fw_frame = self.fw_frame
         fw_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
         fw_l = QtWidgets.QVBoxLayout(fw_frame)
         fw_l.addWidget(QtWidgets.QLabel("Firewall Control"))
@@ -1254,7 +1255,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(fw_frame)
 
         # Port blocking
-        port_frame = QtWidgets.QFrame()
+        self.port_frame = QtWidgets.QFrame()
+        port_frame = self.port_frame
         port_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
         port_l = QtWidgets.QVBoxLayout(port_frame)
         port_l.addWidget(QtWidgets.QLabel("Port Management"))
@@ -1290,7 +1292,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # Tab 1: Network Monitor
         mon_w = QtWidgets.QWidget()
         mon_l = QtWidgets.QVBoxLayout(mon_w)
-        toggle_frame = QtWidgets.QWidget()
+        self.net_toggle_frame = QtWidgets.QWidget()
+        toggle_frame = self.net_toggle_frame
         toggle_frame.setStyleSheet("background: transparent;")
         toggle_layout = QtWidgets.QHBoxLayout(toggle_frame)
         self.net_status = QtWidgets.QLabel("●  Monitoring: OFF")
@@ -3378,6 +3381,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.autostart_cb.setEnabled(False)
             self.autostart_enabled = True
 
+            # Disable all protection toggles
+            for btn in (self.rt_toggle, self.rw_toggle, self.wc_toggle,
+                        self.wc_block_btn, self.wc_unblock_btn, self.net_toggle):
+                try: btn.setEnabled(False)
+                except AttributeError: pass
+            for f in (self.fw_frame, self.port_frame, self.net_toggle_frame):
+                try: f.hide()
+                except AttributeError: pass
+            if hasattr(self, 'protect_cb'):
+                self.protect_cb.setEnabled(False)
+
             # Save state
             self.engine.config_data["enterprise_mode"] = True
             self.engine.save_config()
@@ -3440,6 +3454,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("DefendR - Advanced Protection")
         self.tray.setToolTip("Protected by DefendR")
         self.engine.scan_level = "medium"
+
+        # Re-enable all protection toggles
+        for btn in (self.rt_toggle, self.rw_toggle, self.wc_toggle,
+                    self.wc_block_btn, self.wc_unblock_btn, self.net_toggle):
+            try: btn.setEnabled(True)
+            except AttributeError: pass
+        for f in (self.fw_frame, self.port_frame, self.net_toggle_frame):
+            try: f.show()
+            except AttributeError: pass
+        if hasattr(self, 'protect_cb'):
+            self.protect_cb.setEnabled(True)
 
         # Restore autostart to user preference
         self.autostart_cb.setEnabled(True)
