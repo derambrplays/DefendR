@@ -33,6 +33,11 @@
 - Resultados por drive + recomendações inteligentes (espaço, integridade)
 
 ### 🛡 Proteção em Tempo Real
+- KernelGuard com **eBPF** (bcc) — monitora `execve`, `openat`, `connect` via kernel probes
+- Detecção de **fileless malware** (processos sem binário em disco)
+- Detecção de **fork bomb** (burst de execuções)
+- Detecção de **reverse shell** (shells conectadas a portas remotas)
+- Detecção de **mineradores** (conexões a portas conhecidas de mineração)
 - Monitora diretórios com watchdog (`/tmp`, Downloads, Desktop)
 - Detecta criação/modificação de arquivos automaticamente
 - Notificação na bandeja do sistema
@@ -223,6 +228,7 @@ sudo apk add py3-pyqt5 py3-psutil
 | openvpn | ❌ Opcional | VPN Manager |
 | lsof | ❌ Opcional | Webcam Protection |
 | watchdog | ❌ Opcional | Real-time file monitor (pip3 install watchdog) |
+| bpfcc-tools | ❌ Opcional | KernelGuard eBPF probes (apt install bpfcc-tools) |
 
 ---
 
@@ -247,6 +253,7 @@ sudo apk add py3-pyqt5 py3-psutil
 │   ├── quarantine.py       # Gerenciador de quarentena
 │   ├── scheduler.py        # Scans agendados, signature updater
 │   ├── scan_root.py        # Helper de scan rodando como root (JSON-out)
+│   ├── kernel_guard.py      # eBPF probes (execve, openat, connect) via bcc
 │   ├── icon.svg            # Ícone vetorial (escudo com D)
 │   ├── telemetry.py        # Cliente HTTP para servidor remoto
 │   ├── filelock.py         # Prevenção de múltiplas instâncias
