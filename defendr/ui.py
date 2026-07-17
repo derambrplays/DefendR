@@ -2379,8 +2379,9 @@ class MainWindow(QtWidgets.QMainWindow):
         gen_l.addWidget(restart_frame)
 
         # Uninstall button
-        uninst_frame = QtWidgets.QFrame()
-        uninst_frame.setStyleSheet(f"background: rgba(255,69,58,0.04); border: 1px solid {RED}; border-radius: 14px;")
+        self.uninst_frame = QtWidgets.QFrame()
+        uninst_frame = self.uninst_frame
+        uninst_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
         uninst_l = QtWidgets.QVBoxLayout(uninst_frame)
         uninst_l.addWidget(QtWidgets.QLabel("Desinstalar DefendR"))
         uninst_l.addWidget(QtWidgets.QLabel("Remove todos os arquivos, configuracoes e atalhos do sistema"))
@@ -3390,7 +3391,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 try: btn.setEnabled(False)
                 except AttributeError: pass
             for f in (self.rt_frame, self.rw_frame, self.wc_frame,
-                      self.fw_frame, self.port_frame, self.net_toggle_frame):
+                      self.fw_frame, self.port_frame, self.net_toggle_frame,
+                      self.uninst_frame):
                 try: f.hide()
                 except AttributeError: pass
             if hasattr(self, 'protect_cb'):
@@ -3465,7 +3467,8 @@ class MainWindow(QtWidgets.QMainWindow):
             try: btn.setEnabled(True)
             except AttributeError: pass
         for f in (self.rt_frame, self.rw_frame, self.wc_frame,
-                  self.fw_frame, self.port_frame, self.net_toggle_frame):
+                  self.fw_frame, self.port_frame, self.net_toggle_frame,
+                  self.uninst_frame):
             try: f.show()
             except AttributeError: pass
         if hasattr(self, 'protect_cb'):
