@@ -591,6 +591,8 @@ class MainWindow(QtWidgets.QMainWindow):
             """ if active else "background: transparent;")
 
     def _set_protection_level(self, level):
+        if getattr(self, 'enterprise_mode', False):
+            return
         self.protection_level = level
         self.engine.config_data["protection_level"] = level
         try:
@@ -960,7 +962,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(action_frame)
 
         # Protection level
-        prot_frame = QtWidgets.QFrame()
+        self.prot_frame = QtWidgets.QFrame()
+        prot_frame = self.prot_frame
         prot_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
         prot_layout = QtWidgets.QVBoxLayout(prot_frame)
         prot_header = QtWidgets.QLabel("🛡  Protection Level")
@@ -2314,7 +2317,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.enterprise_cb.setStyleSheet(f"QCheckBox {{ color: {RED}; font-size: 13px; font-weight: 600; }} QCheckBox::indicator {{ width: 18px; height: 18px; }}")
         self.enterprise_cb.toggled.connect(self._toggle_enterprise_mode)
         if self.engine.config_data.get("enterprise_mode"):
+            self.enterprise_cb.blockSignals(True)
             self.enterprise_cb.setChecked(True)
+            self.enterprise_cb.blockSignals(False)
         em_btn_row.addWidget(self.enterprise_cb)
         em_btn_row.addStretch()
         em_l.addLayout(em_btn_row)
@@ -2451,6 +2456,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.engine.config_data.get("enterprise_mode"):
             self._setup_autostart()
             self.autostart_enabled = True
+            QtCore.QTimer.singleShot(1000, self._activate_enterprise)
 
     def _update_stats(self):
         try:
@@ -2865,8 +2871,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.alert_list.insertItem(0, ditem)
         if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
         if risk == "malicious":
-            cur = int(self.stat_cards["threats"].value_lbl.text() or "0")
-            self.stat_cards["threats"].set_value(str(cur + 1))
+            try:
+                cur = int(self.stat_cards["threats"].value_lbl.text() or "0")
+                self.stat_cards["threats"].set_value(str(cur + 1))
+            except ValueError:
+                self.stat_cards["threats"].set_value("1")
+        xp_bonus = {"malicious": 20, "suspicious": 10}.get(risk, 0)
+        if xp_bonus and hasattr(self.engine, 'joguin'):
+            old_lv = self.engine.joguin.level
+            self.engine.joguin.xp += xp_bonus
+            new_lv = self.engine.joguin.level
+            if new_lv > old_lv:
+                self.engine.joguin.xp += new_lv * 50
+            self.engine.joguin._save()
 
     # ===================== RANSOMEWARE =====================
     def _toggle_rw(self):
@@ -3280,88 +3297,96 @@ class MainWindow(QtWidgets.QMainWindow):
             self._deactivate_enterprise()
 
     def _activate_enterprise(self):
-        if not self._ensure_enterprise_password():
-            self.enterprise_cb.setChecked(False)
-            return
-        self.enterprise_mode = True
-        self.engine.scan_level = "heavy"
-        self.engine.protection_active = True
-
-        # Enable ALL monitors
-        self.netmon.start()
-        self._on_net_alert("INFO", "Network monitor ativado pelo Modo Empresarial")
-        self.rt_protector.start()
-        if hasattr(self, 'rt_toggle'):
-            self.rt_toggle.setText("⏹ Stop Real-Time Protection")
-        if hasattr(self, 'rt_status'):
-            self.rt_status.setText("Status: Active")
-        self.ransomware.start()
-        if hasattr(self, 'rw_toggle'):
-            self.rw_toggle.setText("⏹ Stop Ransomware Detection")
-        if hasattr(self, 'rw_status'):
-            self.rw_status.setText("Status: Active")
-        self.usb_scanner.start()
-        self.webcam_protector.start()
-        if hasattr(self, 'wc_toggle'):
-            self.wc_toggle.setText("⏹ Stop Webcam Monitor")
-        if hasattr(self, 'wc_status'):
-            self.wc_status.setText("Status: Active")
-
-        # Block webcam hardware
-        self.webcam_protector.block_webcam(hard=True)
-        if hasattr(self, 'wc_list'):
-            self.wc_list.addItem("Webcam bloqueada pelo Modo Empresarial")
-
-        # Firewall strict mode
-        self.firewall.enable()
-        if hasattr(self, 'fw_status'):
-            self.fw_status.setText("Firewall: ENABLED (Enterprise)")
-
-        # Block all known malicious domains
-        from defendr.constants import MALICIOUS_DOMAINS
-        for domain in MALICIOUS_DOMAINS:
-            self.web_blocker.block_domain(domain)
-
-        # Schedule aggressive rootkit scans
-        self._rootkit_timer = QtCore.QTimer()
-        self._rootkit_timer.timeout.connect(self._run_enterprise_rootkit)
-        self._rootkit_timer.start(600000)  # every 10 minutes
-
-        # Initial rootkit scan
-        self._run_enterprise_rootkit()
-
-        # Faster monitoring
-        self.monitor_timer.setInterval(2000)
-
-        # Force process refresh more often
-        self.proc_timer.setInterval(3000)
-
-        # Update UI indicators
-        self.protect_indicator.setText("●  EMPRESARIAL")
-        self.protect_indicator.setStyleSheet(f"font-size: 11px; color: {RED}; background: rgba(255,69,58,0.08); padding: 2px 4px; border-radius: 4px; font-weight: 700;")
-        self.protect_count.setText("🔥 Modo Empresarial ativo")
-        self.enterprise_badge.show()
-        self.setWindowTitle("DefendR - EMPRESARIAL [PROTECAO TOTAL]")
-        self.tray.setToolTip("DefendR - MODO EMPRESARIAL ATIVO")
-
-        # Dashboard stat update
         try:
-            self.stat_cards["threats"].set_value("MAX")
-        except Exception:
-            pass
+            if not self._ensure_enterprise_password():
+                self.enterprise_cb.setChecked(False)
+                return
+            self.enterprise_mode = True
+            self.engine.scan_level = "heavy"
+            self.engine.protection_active = True
 
-        self._show_msg("🔴 MODO EMPRESARIAL ATIVADO - Todas as protecoes em nivel maximo")
-        self.sig_updater.update_signal.emit("EMPRESARIAL: Vigilancia total ativa")
+            # Enable ALL monitors
+            self.netmon.start()
+            self._on_net_alert("INFO", "Network monitor ativado pelo Modo Empresarial")
+            self.rt_protector.start()
+            if hasattr(self, 'rt_toggle'):
+                self.rt_toggle.setText("⏹ Stop Real-Time Protection")
+            if hasattr(self, 'rt_status'):
+                self.rt_status.setText("Status: Active")
+            self.ransomware.start()
+            if hasattr(self, 'rw_toggle'):
+                self.rw_toggle.setText("⏹ Stop Ransomware Detection")
+            if hasattr(self, 'rw_status'):
+                self.rw_status.setText("Status: Active")
+            self.usb_scanner.start()
+            self.webcam_protector.start()
+            if hasattr(self, 'wc_toggle'):
+                self.wc_toggle.setText("⏹ Stop Webcam Monitor")
+            if hasattr(self, 'wc_status'):
+                self.wc_status.setText("Status: Active")
 
-        # Force autostart on (locked)
-        self._setup_autostart()
-        self.autostart_cb.setChecked(True)
-        self.autostart_cb.setEnabled(False)
-        self.autostart_enabled = True
+            # Block webcam hardware
+            self.webcam_protector.block_webcam(hard=True)
+            if hasattr(self, 'wc_list'):
+                self.wc_list.addItem("Webcam bloqueada pelo Modo Empresarial")
 
-        # Save state
-        self.engine.config_data["enterprise_mode"] = True
-        self.engine.save_config()
+            # Firewall strict mode
+            self.firewall.enable()
+            if hasattr(self, 'fw_status'):
+                self.fw_status.setText("Firewall: ENABLED (Enterprise)")
+
+            # Block all known malicious domains
+            from defendr.constants import MALICIOUS_DOMAINS
+            for domain in MALICIOUS_DOMAINS:
+                self.web_blocker.block_domain(domain)
+
+            # Schedule aggressive rootkit scans
+            self._rootkit_timer = QtCore.QTimer()
+            self._rootkit_timer.timeout.connect(self._run_enterprise_rootkit)
+            self._rootkit_timer.start(600000)  # every 10 minutes
+
+            # Initial rootkit scan
+            self._run_enterprise_rootkit()
+
+            # Faster monitoring
+            self.monitor_timer.setInterval(2000)
+
+            # Force process refresh more often
+            self.proc_timer.setInterval(3000)
+
+            # Update UI indicators
+            self.prot_frame.hide()
+            self.protect_indicator.setText("●  EMPRESARIAL")
+            self.protect_indicator.setStyleSheet(f"font-size: 11px; color: {RED}; background: rgba(255,69,58,0.08); padding: 2px 4px; border-radius: 4px; font-weight: 700;")
+            self.protect_count.setText("🔥 Modo Empresarial ativo")
+            self.enterprise_badge.show()
+            self.setWindowTitle("DefendR - EMPRESARIAL [PROTECAO TOTAL]")
+            self.tray.setToolTip("DefendR - MODO EMPRESARIAL ATIVO")
+
+            # Dashboard stat update
+            try:
+                self.stat_cards["threats"].set_value("MAX")
+            except Exception:
+                pass
+
+            self._show_msg("🔴 MODO EMPRESARIAL ATIVADO - Todas as protecoes em nivel maximo")
+            self.sig_updater.update_signal.emit("EMPRESARIAL: Vigilancia total ativa")
+
+            # Force autostart on (locked)
+            self._setup_autostart()
+            self.autostart_cb.setChecked(True)
+            self.autostart_cb.setEnabled(False)
+            self.autostart_enabled = True
+
+            # Save state
+            self.engine.config_data["enterprise_mode"] = True
+            self.engine.save_config()
+        except Exception as e:
+            self.engine.config_data["enterprise_mode"] = False
+            self.engine.save_config()
+            self.enterprise_mode = False
+            self.enterprise_cb.setChecked(False)
+            self._show_msg(f"Erro ao ativar Modo Empresarial: {e}")
 
     def _deactivate_enterprise(self):
         self.enterprise_mode = False
@@ -3407,6 +3432,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proc_timer.setInterval(5000)
 
         # Update UI
+        self.prot_frame.show()
         self.protect_indicator.setText("●  Protected")
         self.protect_indicator.setStyleSheet(f"font-size: 11px; color: {GREEN}; background: transparent;")
         self.protect_count.setText("0 threats blocked")

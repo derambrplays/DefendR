@@ -409,6 +409,7 @@ class DefendREngine:
 
             suspicious_name = any(s.decode().lower() in name for s in self.suspicious_strings)
             if suspicious_name:
+                self.joguin.learn(str(fpath), "suspicious")
                 return {"path": str(fpath), "risk": "suspicious", "reason": "Nome sugestivo", "size": size, "type": "name"}
 
             # Read first 2MB for pattern matching
@@ -420,7 +421,9 @@ class DefendREngine:
                     if len(match_reasons) >= 2:
                         break
             if match_reasons:
+                self.joguin.learn(str(fpath), "suspicious")
                 return {"path": str(fpath), "risk": "suspicious", "reason": "; ".join(match_reasons), "size": size, "type": "pattern"}
+            self.joguin.learn(str(fpath), "safe")
             return None
         except (PermissionError, OSError):
             return None
@@ -446,6 +449,7 @@ class DefendREngine:
 
             suspicious_name = any(s.decode().lower() in name for s in self.suspicious_strings)
             if suspicious_name:
+                self.joguin.learn(str(fpath), "suspicious")
                 return {"path": str(fpath), "risk": "suspicious", "reason": "Nome sugestivo", "size": size, "type": "name"}
 
             # Read entire file for full pattern matching
@@ -466,7 +470,9 @@ class DefendREngine:
             if match_reasons:
                 risk = "malicious" if len(match_reasons) >= 2 else "suspicious"
                 threat_type = self._classify_threat(match_reasons)
+                self.joguin.learn(str(fpath), risk)
                 return {"path": str(fpath), "risk": risk, "reason": "; ".join(match_reasons[:4]), "size": size, "type": threat_type}
+            self.joguin.learn(str(fpath), "safe")
             return None
         except (PermissionError, OSError):
             return None
