@@ -107,6 +107,7 @@
 
 ### 🔄 Signature Updater
 - Assinaturas do GitHub + ClamAV (daily.cvd + main.cvd)
+- Atualizações automáticas a cada 30 dias
 
 ### 🎮 Game Mode
 - Detecta fullscreen, suprime notificações
