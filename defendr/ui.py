@@ -3479,6 +3479,8 @@ class MainWindow(QtWidgets.QMainWindow):
         user_autostart = self.engine.config_data.get("autostart", False)
         self.autostart_cb.setChecked(user_autostart)
 
+        self.engine.config_data["enterprise_mode"] = False
+        self.engine.save_config()
         self._show_msg("Modo Individual restaurado - Protecao normal")
 
     def _ensure_enterprise_password(self):
