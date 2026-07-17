@@ -4,3 +4,4 @@ __pycache__/
 assets/
 *.swp
 *.swo
+.defendr_stop

@@ -18,9 +18,9 @@
 - Badge "🔥 EMPRESARIAL" na sidebar
 
 ### 🔍 Scanner de Arquivos (3 níveis)
-- **Light (quick)** — extensões suspeitas e heurística rápida
-- **Medium (balanced)** — signature + heurística + strings ofuscadas
-- **Heavy (deep)** — varredura completa com scan de entropia e packers
+- **Light (leve)** — nome do arquivo + primeiros 2MB do conteúdo
+- **Medium (médio)** — arquivo inteiro + padrões + strings suspeitas
+- **Heavy (pesado)** — arquivo inteiro + IA (JoguinIA com 12 features) + entropia + heurística + hash
 - Detecção por **assinatura** (PE, ELF, ZIP, GZip, PNG)
 - **Whitelist** automática com **90+ ferramentas pentest**
 - Scan de arquivo, pasta, USB, agendado
@@ -44,11 +44,17 @@
 - Detecção de **port scan** e **força bruta** (journalctl)
 - Flush (limpar todas as regras)
 
-### 🌐 Monitor de Rede
-- **Detecção de ARP Spoofing**
-- **DNS Hijack Detection**
-- **Port Scan Listener**
-- **C2 Connection Monitor**
+### 🌐 Monitor de Rede (Nível Enterprise)
+- **Detecção de ARP Spoofing** — MAC address changes + novos dispositivos na rede
+- **DNS Hijack Detection** — nameservers não autorizados
+- **Port Scan Detection** — detecta scan de QUALQUER IP (inclusive localhost/ADB)
+- **Brute Force Detection** — força bruta em portas sensíveis (SSH, RDP, MySQL, etc.)
+- **Inbound Connections** — conexões entrantes em portas sensíveis de qualquer IP externo
+- **ADB Tunnel Detection** — túnel reverso ADB (Android acessando o PC)
+- **Monitoramento/Spyware Detection** — keyloggers, sniffers, debuggers, ferramentas forenses rodando no sistema
+- **Novo dispositivo na rede** — alerta imediato via ARP
+- **Interfaces em modo promíscuo** — detecta sniffers de rede
+- **Módulos kernel suspeitos** — kprobe, systemtap, ftrace
 - ARP Table, DNS Servers, Conexões ativas
 
 ### 👤 Sistema de Contas (Telemetria)
@@ -267,6 +273,30 @@ sudo apk add py3-pyqt5 py3-psutil
 - openSUSE Tumbleweed ✅
 - Alpine Linux ✅
 - Void Linux ✅
+
+## 🔬 Testado com Ataques Reais
+
+- **Port scan real de outro computador na rede** (WiFi) — detectado em segundos
+- **Port scan real de um celular Android** (mesma rede WiFi) — detectado como IP externo
+- **Brute force real de um celular Android** — múltiplas conexões em porta sensível detectadas
+- **ADB reverse tunnel** — túnel USB do Android para o PC detectado
+- **EICAR test file** — detectado pela proteção em tempo real, watchdog e AI
+- **Ferramentas forenses** (nmap, hydra, sqlmap, volatility, metasploit) — detectadas rodando no sistema
+- **Interfaces em modo promíscuo** — detectadas como sniffer
+- **Argumentos de linha de comando suspeitos** — detectados por heurística
+
+O DefendR foi testado contra ataques reais de **dispositivos móveis** e **outros computadores** na mesma rede, simulando cenários reais de invasão. O monitor de rede cobre **qualquer IP** — inclusive localhost (para detectar túneis ADB e conexões locais maliciosas).
+
+## 🕵️ Proteção Contra Monitoramento
+
+O DefendR detecta ativamente **técnicas de investigação digital**:
+
+- **Spyware / Keylogger** — processos lendo /dev/input/*, nomes conhecidos de keyloggers
+- **Sniffers de rede** — tcpdump, wireshark, ettercap, bettercap rodando ou interface em modo promíscuo
+- **Ferramentas forenses** — volatility, autopsy, sleuthkit, foremost
+- **Ferramentas de pentest** — nmap, masscan, hydra, sqlmap, metasploit
+- **Debuggers** — gdb, strace, ltrace, bpftrace
+- **Módulos kernel de monitoramento** — kprobe, systemtap, ftrace carregados
 
 ---
 
