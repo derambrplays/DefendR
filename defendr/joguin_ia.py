@@ -216,11 +216,116 @@ def _section_entropies(filepath):
     return entropies
 
 
+def _pe_compile_epoch(filepath):
+    try:
+        with open(filepath, "rb") as f:
+            data = f.read(0x100)
+        if len(data) < 64 or data[:2] != b"\x4d\x5a":
+            return None
+        pe_off = struct.unpack("<I", data[0x3c:0x40])[0]
+        if pe_off + 8 > len(data):
+            return None
+        ts_raw = struct.unpack("<I", data[pe_off + 8:pe_off + 12])[0]
+        if ts_raw == 0:
+            return None
+        return ts_raw
+    except Exception:
+        return None
+
+
+def _has_rich_header(filepath):
+    try:
+        with open(filepath, "rb") as f:
+            data = f.read(4096)
+        if data[:2] != b"\x4d\x5a":
+            return False
+        idx = data.find(b"Rich")
+        if idx == -1:
+            return False
+        before = data[idx - 4:idx]
+        xor_key = before[0] ^ ord("R")
+        return all(b ^ xor_key == c for b, c in zip(before, b"Rich"))
+    except Exception:
+        return False
+
+
+def _count_tls_callbacks(filepath):
+    try:
+        with open(filepath, "rb") as f:
+            data = f.read()
+        if len(data) < 64 or data[:2] != b"\x4d\x5a":
+            return 0
+        pe_off = struct.unpack("<I", data[0x3c:0x40])[0]
+        if pe_off + 24 + 112 > len(data) or data[pe_off:pe_off+4] != b"PE\x00\x00":
+            return 0
+        opt = pe_off + 24
+        magic = struct.unpack("<H", data[opt:opt+2])[0]
+        if magic not in (0x10b, 0x20b):
+            return 0
+        ohs = struct.unpack("<H", data[pe_off+20:pe_off+22])[0]
+        sec_off = pe_off + 24 + ohs
+        ns = struct.unpack("<H", data[pe_off+6:pe_off+8])[0]
+        ndirs = struct.unpack("<I", data[opt+92:opt+96])[0]
+        if ndirs < 9:
+            return 0
+        tls_rva = struct.unpack("<I", data[opt + 96 + 8 * 9:opt + 96 + 8 * 9 + 4])[0]
+        if tls_rva == 0:
+            return 0
+        sections = []
+        for i in range(ns):
+            s = sec_off + i * 40
+            if s + 40 > len(data):
+                break
+            va = struct.unpack("<I", data[s+12:s+16])[0]
+            vs = struct.unpack("<I", data[s+8:s+12])[0]
+            ra = struct.unpack("<I", data[s+20:s+24])[0]
+            sections.append((va, vs, ra))
+        def rva2off(rva):
+            for va, vs, ra in sections:
+                if va <= rva < va + vs:
+                    return ra + (rva - va)
+            return None
+        tls_off = rva2off(tls_rva)
+        if tls_off is None or tls_off + 16 > len(data):
+            return 0
+        if magic == 0x10b:
+            callbacks_va = struct.unpack("<I", data[tls_off+12:tls_off+16])[0]
+        else:
+            callbacks_va = struct.unpack("<Q", data[tls_off+24:tls_off+32])[0]
+        cb_off = rva2off(callbacks_va & 0xffffffff)
+        if cb_off is None:
+            return 0
+        count = 0
+        for i in range(256):
+            pos = cb_off + i * (4 if magic == 0x10b else 8)
+            if pos + (4 if magic == 0x10b else 8) > len(data):
+                break
+            if magic == 0x10b:
+                cb = struct.unpack("<I", data[pos:pos+4])[0]
+            else:
+                cb = struct.unpack("<Q", data[pos:pos+8])[0]
+            if cb == 0:
+                break
+            count += 1
+        return count
+    except Exception:
+        return 0
+
+
+def _hash_similarity(hash1, hash2):
+    if not hash1 or not hash2:
+        return 0
+    same = sum(1 for a, b in zip(hash1, hash2) if a == b)
+    return same / max(len(hash1), len(hash2))
+
+
 FEATURE_KEYS = [
     "size_bucket", "entropy_bucket", "ext_type", "is_pe",
     "imports_bucket", "sus_strings_bucket", "sections_bucket",
     "path_variety", "is_hidden", "null_ratio_bucket", "entropy_range_bucket",
     "long_strings_bucket",
+    "compile_epoch_bucket", "rich_header", "tls_callbacks_bucket",
+    "entropy_variance_bucket",
 ]
 
 
@@ -411,6 +516,48 @@ def _extract_features(filepath, file_hash=None, header=None, content=None):
     in_dl = any(d in fpath_lower for d in dl_dirs)
     features["path_variety"] = "download" if in_dl else "other"
 
+    if features["is_pe"] == "yes":
+        epoch = _pe_compile_epoch(filepath)
+        if epoch is None:
+            features["compile_epoch_bucket"] = "none"
+        else:
+            if epoch < 1262304000:
+                features["compile_epoch_bucket"] = "old"
+            elif epoch < 1483228800:
+                features["compile_epoch_bucket"] = "mid"
+            else:
+                features["compile_epoch_bucket"] = "recent"
+        features["rich_header"] = "yes" if _has_rich_header(filepath) else "no"
+        tls_count = _count_tls_callbacks(filepath)
+        if tls_count == 0:
+            features["tls_callbacks_bucket"] = "none"
+        elif tls_count <= 2:
+            features["tls_callbacks_bucket"] = "few"
+        elif tls_count <= 5:
+            features["tls_callbacks_bucket"] = "several"
+        else:
+            features["tls_callbacks_bucket"] = "many"
+        se = _section_entropies(filepath)
+        if se and len(se) > 1:
+            mean = sum(se) / len(se)
+            var = sum((e - mean) ** 2 for e in se) / len(se)
+            std = var ** 0.5
+            if std < 0.5:
+                features["entropy_variance_bucket"] = "low"
+            elif std < 1.5:
+                features["entropy_variance_bucket"] = "moderate"
+            elif std < 3.0:
+                features["entropy_variance_bucket"] = "high"
+            else:
+                features["entropy_variance_bucket"] = "very_high"
+        else:
+            features["entropy_variance_bucket"] = "none"
+    else:
+        features["compile_epoch_bucket"] = "none"
+        features["rich_header"] = "no"
+        features["tls_callbacks_bucket"] = "none"
+        features["entropy_variance_bucket"] = "none"
+
     return features
 
 
@@ -463,6 +610,21 @@ SEED_KNOWLEDGE = {
     "long_strings_bucket=few": {"mal": 80, "safe": 60},
     "long_strings_bucket=several": {"mal": 140, "safe": 20},
     "long_strings_bucket=many": {"mal": 200, "safe": 5},
+    "compile_epoch_bucket=old": {"mal": 60, "safe": 80},
+    "compile_epoch_bucket=mid": {"mal": 100, "safe": 60},
+    "compile_epoch_bucket=recent": {"mal": 120, "safe": 50},
+    "compile_epoch_bucket=none": {"mal": 40, "safe": 100},
+    "rich_header=yes": {"mal": 130, "safe": 30},
+    "rich_header=no": {"mal": 60, "safe": 150},
+    "tls_callbacks_bucket=none": {"mal": 60, "safe": 120},
+    "tls_callbacks_bucket=few": {"mal": 100, "safe": 40},
+    "tls_callbacks_bucket=several": {"mal": 150, "safe": 15},
+    "tls_callbacks_bucket=many": {"mal": 200, "safe": 5},
+    "entropy_variance_bucket=none": {"mal": 50, "safe": 100},
+    "entropy_variance_bucket=low": {"mal": 40, "safe": 90},
+    "entropy_variance_bucket=moderate": {"mal": 80, "safe": 80},
+    "entropy_variance_bucket=high": {"mal": 130, "safe": 25},
+    "entropy_variance_bucket=very_high": {"mal": 170, "safe": 10},
 }
 
 _LEVEL_UP_MESSAGES = [
@@ -568,6 +730,30 @@ class JoguinIA:
         p = (mal + alpha) / (total + 2 * alpha)
         return round(p * 100, 1), total
 
+    def _similar_hash_boost(self, file_hash, features):
+        if not file_hash or len(self.known_hashes) < 3:
+            return 0, 0
+        best_sim = 0
+        best_verdict = None
+        for kh, kv in self.known_hashes.items():
+            sim = _hash_similarity(file_hash, kh)
+            if sim > best_sim:
+                best_sim = sim
+                best_verdict = kv
+        mal_boost = 0
+        safe_boost = 0
+        if best_sim >= 0.85 and best_verdict:
+            if best_verdict in ("malicious", "suspicious"):
+                mal_boost += 60
+            else:
+                safe_boost += 60
+        elif best_sim >= 0.70 and best_verdict:
+            if best_verdict in ("malicious", "suspicious"):
+                mal_boost += 30
+            else:
+                safe_boost += 30
+        return mal_boost, safe_boost
+
     def analyze(self, filepath, file_hash=None, header=None, content=None):
         if not os.path.isfile(filepath):
             return {"risk": "unknown", "confidence": 0, "features": {}}
@@ -585,6 +771,9 @@ class JoguinIA:
             entry = self.weights.get(key, {"mal": 0, "safe": 0})
             mal_score += entry["mal"]
             safe_score += entry["safe"]
+        sim_mal, sim_safe = self._similar_hash_boost(file_hash, features)
+        mal_score += sim_mal
+        safe_score += sim_safe
         confidence, samples = self._laplace_confidence(mal_score, safe_score)
         if samples == 0:
             risk = "unknown"
@@ -596,7 +785,7 @@ class JoguinIA:
         else:
             risk = "safe"
             confidence = 100 - confidence
-        return {"risk": risk, "confidence": confidence, "features": features, "hash_known": False}
+        return {"risk": risk, "confidence": confidence, "features": features, "hash_known": False, "sim_boost": sim_mal > 0 or sim_safe > 0}
 
     def learn(self, filepath, actual_risk, file_hash=None, header=None, content=None, user_agreed=False):
         features = _extract_features(filepath, file_hash=file_hash, header=header, content=content)

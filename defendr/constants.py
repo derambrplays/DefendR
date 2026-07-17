@@ -17,11 +17,18 @@ YELLOW = "#ffd60a"
 CYAN = "#64d2ff"
 FONT = "-apple-system, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif"
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 QUARANTINE_DIR = os.path.expanduser("~/.defendr_quarantine")
 CONFIG_DIR = os.path.expanduser("~/.defendr")
 os.makedirs(QUARANTINE_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
+
+VT_CACHE_FILE = os.path.join(CONFIG_DIR, "vt_cache.json")
+SIG_SOURCES = [
+    "https://raw.githubusercontent.com/derambrplays/DefendR/main/signatures.json",
+    "https://raw.githubusercontent.com/anomalyco/defendr-sigs/main/sigs.json",
+    "https://raw.githubusercontent.com/derambrplays/defendr-threat-intel/main/sigs.json",
+]
 
 PENTEST_WHITELIST = frozenset({
     "metasploit", "msfconsole", "msfvenom", "msf", "msfd", "msfrpc", "msfrpcd", "msfdb",
@@ -173,6 +180,57 @@ MALWARE_PATTERNS = (
     (b"\x31\xc0\x50\x68\x2f\x2f\x73\x68", "Shellcode: execve /bin/sh"),
     (b"\x31\xc9\xf7\xe1\xb0\x0b\x51\x68", "Shellcode: execve (alt)"),
     (b"\x6a\x0b\x58\x99\x52\x66\x68\x2d", "Shellcode: execve /bin/sh 64"),
+    (b"C2_SERVER", "C2 communication pattern"),
+    (b"botnet_c2", "Botnet C2 indicator"),
+    (b"dropbear", "SSH backdoor"),
+    (b"backdoor_shell", "Backdoor shell"),
+    (b"reverse_shell_handler", "Reverse shell handler"),
+    (b"privilege_escalation_exploit", "Privilege escalation"),
+    (b"kernel_exploit_", "Kernel exploit code"),
+    (b"rootkit_injection", "Rootkit injector"),
+    (b"infostealer_", "Information stealer"),
+    (b"ransomware_encryptor", "Ransomware encryptor"),
+    (b"loader_payload", "Malware loader"),
+    (b"dropper_stage", "Malware dropper"),
+    (b"bypass_uac", "UAC bypass"),
+    (b"amsi_bypass", "AMSI bypass"),
+    (b"etw_bypass", "ETW bypass"),
+    (b"process_inject_", "Process injection"),
+    (b"hollow_process", "Process hollowing"),
+    (b"apc_inject_", "APC injection"),
+    (b"thread_inject_", "Thread injection"),
+    (b"dll_reflect_", "Reflective DLL loading"),
+    (b"keylog_capture", "Keylogging routine"),
+    (b"clipboard_monitor", "Clipboard monitoring"),
+    (b"screen_capture_", "Screen capture"),
+    (b"webcam_capture_", "Webcam capture"),
+    (b"audio_capture_", "Audio capture"),
+    (b"persist_registry", "Registry persistence"),
+    (b"persist_service", "Service persistence"),
+    (b"persist_startup", "Startup persistence"),
+    (b"persist_scheduled", "Scheduled task persistence"),
+    (b"lateral_movement_", "Lateral movement"),
+    (b"pass_the_hash", "Pass-the-hash attack"),
+    (b"credential_dump", "Credential dumping"),
+    (b"token_steal_", "Token stealing"),
+    (b"mimikatz_", "Mimikatz credential tool"),
+    (b"wce_", "Windows credential editor"),
+    (b"cobaltstrike_beacon", "CobaltStrike beacon"),
+    (b"meterpreter_stager", "Meterpreter stager"),
+    (b"empire_stager", "Empire stager"),
+    (b"sliver_implant", "Sliver implant"),
+    (b"brute_force_ssh", "SSH brute force"),
+    (b"brute_force_rdp", "RDP brute force"),
+    (b"dictionary_attack", "Dictionary attack"),
+    (b"port_scanner_", "Port scanner"),
+    (b"network_sniff_", "Network sniffer"),
+    (b"arp_spoof_", "ARP spoofing"),
+    (b"dns_spoof_", "DNS spoofing"),
+    (b"mitm_proxy_", "Man-in-the-middle proxy"),
+    (b"ssl_strip_", "SSL stripping"),
+    (b"dns_tunnel_", "DNS tunneling"),
+    (b"icmp_tunnel_", "ICMP tunneling"),
+    (b"http_tunnel_", "HTTP tunneling"),
 )
 
 # Paths excluded from all scans to reduce noise

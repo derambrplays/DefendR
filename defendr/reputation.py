@@ -13,7 +13,7 @@ REPUTATION_DB = "/mnt/defendr/server/reputation.db"
 FALLBACK_DB = os.path.expanduser("~/.defendr/reputation.db")
 REPUTATION_PORT = 48126
 REPUTATION_HOST = "0.0.0.0"  # Listen on all interfaces so LAN clients can connect
-DEFAULT_SERVER_IP = "192.168.1.10"  # Central server IP
+DEFAULT_SERVER_IP = "127.0.0.1"  # Servidor local (systemd)
 DEFAULT_SERVER_URL = f"http://{DEFAULT_SERVER_IP}:{REPUTATION_PORT}"
 MAX_BODY_SIZE = 1024 * 1024
 

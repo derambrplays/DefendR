@@ -12,7 +12,7 @@ from pathlib import Path
 from defendr.constants import (
     CONFIG_DIR, PENTEST_WHITELIST, FILE_MAGIC_BYTES, MALWARE_PATTERNS,
     SUSPICIOUS_EXTS, SUSPICIOUS_STRINGS, SUSPICIOUS_PROCESSES, SYSTEM_PATHS,
-    DEFAULT_EXCLUDE,
+    DEFAULT_EXCLUDE, VT_CACHE_FILE, SIG_SOURCES,
 )
 from defendr.clamav_sigs import load_clamav_patterns
 from defendr.filelock import safe_json_read, safe_json_write
@@ -116,19 +116,36 @@ class DefendREngine:
                 time.sleep(1)
 
     def _download_signatures(self):
-        try:
-            import urllib.request
-            req = urllib.request.Request(
-                SIGNATURE_DB_URL,
-                headers={"User-Agent": "DefendR/2.0"},
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            patterns = data.get("patterns", [])
-            self._remote_patterns = [(p["bytes"].encode("latin-1"), p["name"]) for p in patterns]
-            with open(SIGNATURE_DB_PATH, "w") as f:
-                json.dump({"patterns": [{"bytes": p[0].decode("latin-1"), "name": p[1]} for p in self._remote_patterns]}, f)
-        except Exception:
+        import urllib.request
+        merged = {"patterns": [], "_sources": {}}
+        source_scores = {}
+        all_urls = list(SIG_SOURCES) + [SIGNATURE_DB_URL]
+        for url in all_urls:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "DefendR/2.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                raw = data.get("patterns", data.get("malware_patterns", []))
+                count_before = len(merged["patterns"])
+                for p in raw:
+                    sig_bytes = p["bytes"] if isinstance(p, dict) else p[0]
+                    if sig_bytes not in {s["bytes"] for s in merged["patterns"] if isinstance(s, dict)}:
+                        entry = p if isinstance(p, dict) else {"bytes": p[0], "name": p[1] if len(p) > 1 else "unknown"}
+                        merged["patterns"].append(entry)
+                        merged.setdefault("_sources", {})[sig_bytes] = url
+                source_scores[url] = len(merged["patterns"]) - count_before
+            except Exception:
+                source_scores[url] = -1
+                continue
+        if merged["patterns"]:
+            self._remote_patterns = [(p["bytes"].encode("latin-1"), p["name"]) for p in merged["patterns"]]
+            merged["_source_scores"] = source_scores
+            try:
+                with open(SIGNATURE_DB_PATH, "w") as f:
+                    json.dump(merged, f, indent=2)
+            except Exception:
+                pass
+        else:
             if os.path.isfile(SIGNATURE_DB_PATH):
                 try:
                     with open(SIGNATURE_DB_PATH) as f:
@@ -136,6 +153,56 @@ class DefendREngine:
                     self._remote_patterns = [(p["bytes"].encode("latin-1"), p["name"]) for p in data.get("patterns", [])]
                 except Exception:
                     self._remote_patterns = []
+
+    # --- Virustotal cloud cache ---
+    def _vt_cache_load(self):
+        try:
+            with open(VT_CACHE_FILE) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _vt_cache_save(self, cache):
+        try:
+            with open(VT_CACHE_FILE, "w") as f:
+                json.dump(cache, f)
+        except Exception:
+            pass
+
+    def vt_lookup(self, file_hash):
+        cache = self._vt_cache_load()
+        if file_hash in cache:
+            entry = cache[file_hash]
+            if time.time() - entry["ts"] < 86400:
+                return entry["verdict"]
+        api_key = os.environ.get("VT_API_KEY", "")
+        if not api_key:
+            return None
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                f"https://www.virustotal.com/api/v3/files/{file_hash}",
+                headers={"x-apikey": api_key},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+            stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+            malicious = stats.get("malicious", 0)
+            total = stats.get("total", 0)
+            if total == 0:
+                return None
+            ratio = malicious / max(1, total)
+            if ratio >= 0.3:
+                verdict = "malicious"
+            elif ratio >= 0.05:
+                verdict = "suspicious"
+            else:
+                verdict = "safe"
+            cache[file_hash] = {"verdict": verdict, "ts": time.time(), "malicious": malicious, "total": total}
+            self._vt_cache_save(cache)
+            return verdict
+        except Exception:
+            return None
 
     def _load_clamav(self):
         pats = load_clamav_patterns()
@@ -495,13 +562,23 @@ class DefendREngine:
             if size == 0:
                 return None
 
-            # 1. Hash check
+            # 1. Hash check (local DB)
             file_hash = sha256_file(str(fpath))
             if file_hash:
                 verdict, mal_name = get_hash_verdict(file_hash)
                 if verdict:
                     self.joguin.learn(str(fpath), verdict, file_hash=file_hash)
                     return {"path": str(fpath), "risk": verdict, "reason": f"Known {mal_name} (hash match)", "size": size, "type": "hash"}
+
+            # 1b. Cloud reputation (VT cache + online)
+            if file_hash:
+                vt_v = self.vt_lookup(file_hash)
+                if vt_v in ("malicious", "suspicious"):
+                    self.joguin.learn(str(fpath), vt_v, file_hash=file_hash)
+                    level = "HIGH" if vt_v == "malicious" else "MEDIUM"
+                    return {"path": str(fpath), "risk": vt_v, "reason": f"Cloud reputation ({level}): VirusTotal", "size": size, "type": "cloud"}
+                elif vt_v == "safe":
+                    pass
 
             # 2. Pattern matching (multi-chunk)
             header, content = self._read_chunks(fpath, size, full=True)
@@ -556,25 +633,16 @@ class DefendREngine:
 
     def _check_virustotal(self, results, api_key):
         import hashlib, urllib.request
-        infected = results.get("malicious", [])
-        for entry in infected:
+        for entry in results.get("malicious", []) + results.get("suspicious", []):
             try:
-                with open(entry["path"], "rb") as f:
-                    h = hashlib.sha256(f.read()).hexdigest()
-                req = urllib.request.Request(
-                    VT_API_URL.format(file_hash=h),
-                    headers={"x-apikey": api_key},
-                )
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = json.loads(resp.read().decode())
-                stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
-                malicious_count = stats.get("malicious", 0)
-                if malicious_count >= 3:
+                h = hashlib.sha256(open(entry["path"], "rb").read()).hexdigest()
+                vt_v = self.vt_lookup(h)
+                if vt_v == "malicious":
                     entry["risk"] = "malicious"
-                    entry["reason"] = f"VirusTotal: {malicious_count} engines detected"
-                elif malicious_count > 0:
+                    entry["reason"] = "VirusTotal: confirmed malicious"
+                elif vt_v == "suspicious" and entry["risk"] != "malicious":
                     entry["risk"] = "suspicious"
-                    entry["reason"] = f"VirusTotal: {malicious_count} engines detected (low confidence)"
+                    entry["reason"] = "VirusTotal: suspicious (low confidence)"
             except Exception:
                 pass
 

@@ -14,6 +14,7 @@ from defendr.quarantine import QuarantineManager
 from defendr.scheduler import Scheduler, SignatureUpdater
 from defendr.lang import _
 from defendr.telemetry import TelemetryClient
+from defendr.kernel_guard import KernelGuard
 
 ALERT_SOUND = "/home/kalleb/Downloads/new-ford-chime.mp3"
 
@@ -560,6 +561,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.selfprotect.alert_signal.connect(self._on_selfprotect_alert)
         self.adv_protection = AdvancedProtection()
         self.adv_protection.alert_signal.connect(self._on_adv_alert)
+        self.kernel_guard = KernelGuard(alert_callback=self._on_kernel_alert)
+        self._kernel_guard_started = False
 
         self.setWindowTitle(_("DefendR - Advanced Protection"))
         self.setMinimumSize(1200, 750)
@@ -688,6 +691,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rt_protector.stop()
         self.usb_scanner.stop()
         self.game_mode.stop()
+        self.kernel_guard.stop()
         self.firewall.disable()
         self.engine.stop()
         self.ransomware.stop()
@@ -2413,16 +2417,28 @@ class MainWindow(QtWidgets.QMainWindow):
     # ===================== CLOUD SERVER =====================
     def _auto_start_cloud_server(self):
         try:
-            from defendr.reputation import ReputationServer, REPUTATION_PORT, DEFAULT_SERVER_IP, ReputationClient
-            self._rep_server = ReputationServer()
-            self._rep_server.start()
-            if self._rep_server.actual_port:
-                self.engine.rep_client = ReputationClient(server_url=f"http://{DEFAULT_SERVER_IP}:{self._rep_server.actual_port}")
-            if hasattr(self, 'cloud_server_status'):
-                self.cloud_server_status.setText(f"Servidor: Rodando na porta {self._rep_server.actual_port or REPUTATION_PORT}")
+            from defendr.reputation import ReputationServer, REPUTATION_PORT, ReputationClient
+            import socket as _sock
+            srv_ip = "127.0.0.1"
+            srv_port = REPUTATION_PORT
+            # Verifica se ja tem servidor rodando (via systemd)
+            sock = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+            already_running = sock.connect_ex((srv_ip, srv_port)) == 0
+            sock.close()
+            if already_running:
+                self.engine.rep_client = ReputationClient(server_url=f"http://{srv_ip}:{srv_port}")
+                if hasattr(self, 'cloud_server_status'):
+                    self.cloud_server_status.setText(f"Servidor: Conectado (porta {srv_port})")
+            else:
+                self._rep_server = ReputationServer()
+                self._rep_server.start()
+                port = self._rep_server.actual_port or srv_port
+                self.engine.rep_client = ReputationClient(server_url=f"http://{srv_ip}:{port}")
+                if hasattr(self, 'cloud_server_status'):
+                    self.cloud_server_status.setText(f"Servidor: Rodando na porta {port}")
         except Exception as e:
             if hasattr(self, 'cloud_server_status'):
-                self.cloud_server_status.setText(f"Servidor: Erro ao iniciar - {str(e)[:50]}")
+                self.cloud_server_status.setText(f"Servidor: Erro - {str(e)[:50]}")
 
     # ===================== MONITORS =====================
     def _start_monitors(self):
@@ -2446,6 +2462,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rt_toggle.setText("⏹ Stop Real-Time Protection")
         self.rt_status.setText(_("Status: Active"))
         self.usb_scanner.start()
+        self._start_kernel_guard()
         if self.protection_level in ("medium", "hard"):
             self.ransomware.start()
             self.rw_toggle.setText("⏹ Stop Ransomware Detection")
@@ -2464,6 +2481,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self._setup_autostart()
             self.autostart_enabled = True
             QtCore.QTimer.singleShot(1000, self._activate_enterprise)
+
+    def _start_kernel_guard(self):
+        if self._kernel_guard_started:
+            return
+        ok = self.kernel_guard.start()
+        self._kernel_guard_started = ok
+        status = "eBPF" if ok else "fallback"
+        if self.kernel_guard._bcc_available:
+            print(f"[KernelGuard] Iniciado modo {status}")
+        else:
+            print("[KernelGuard] bcc nao instalado — fallback /proc ativado")
 
     def _update_stats(self):
         try:
@@ -3622,6 +3650,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_adv_alert(self, severity, msg):
         self._show_msg(f"[AVANCADA] {msg}", sound=True)
         self._show_intrusion_popup(severity, msg, "Protecao Avancada", "127.0.0.1")
+
+    def _on_kernel_alert(self, severity, msg):
+        self._show_msg(f"[KERNEL] {msg}", sound=(severity == "HIGH"))
+        self._show_intrusion_popup(severity, msg, "KernelGuard", "127.0.0.1")
 
     def _on_webcam_alert(self, level, msg):
         self._show_msg(f"[WEBCAM] {msg}", sound=True)

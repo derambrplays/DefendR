@@ -345,7 +345,7 @@ class BehavioralProtection(QtCore.QObject):
             total = len(self._prev_procs) if self._prev_procs else 0
             if total < 10:
                 return
-            if total > 500 and total > self._fork_bomb_counter.get("last", 0) + 100:
+            if total > 5000 and total > self._fork_bomb_counter.get("last", 0) + 500:
                 self._fork_bomb_counter["last"] = total
                 self._dedup_emit("HIGH",
                     f"Possivel fork bomb: {total} processos rodando!")
@@ -355,8 +355,7 @@ class BehavioralProtection(QtCore.QObject):
     def _check_suspicious_procs(self):
         try:
             import psutil
-            sus_names = {"nc", "ncat", "perl",
-                         "ruby", "php", "nmap", "masscan", "hydra", "medusa"}
+            sus_names = {"nc", "ncat", "nmap", "masscan", "hydra", "medusa"}
             for proc in psutil.process_iter(["pid", "name", "connections"]):
                 try:
                     name = proc.info["name"] or ""

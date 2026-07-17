@@ -34,6 +34,12 @@ class NetworkMonitor(QtCore.QObject):
         self._monitoring_alerted = set()
         self._promisc_alerted = set()
         self._kernel_alerted = set()
+        self._cpu_history = defaultdict(lambda: {"samples": [], "total_cpu": 0.0})
+        self._fork_history = defaultdict(lambda: {"count": 0, "first": 0})
+        self._fork_alerted = set()
+        self._miner_alerted = set()
+        self._fileless_alerted = set()
+        self._inj_alerted = set()
     def start(self):
         if getattr(self, '_mon_thread', None) and self._mon_thread.is_alive():
             self.monitoring = False
@@ -48,12 +54,20 @@ class NetworkMonitor(QtCore.QObject):
         if getattr(self, '_mon_thread', None):
             self._mon_thread.join(timeout=2)
     def _run(self):
+        cycle = 0
         while self.monitoring:
             try:
                 self._check_arp(); self._check_ports(); self._check_dns()
                 self._check_inbound(); self._check_bruteforce()
                 self._check_port_scan(); self._check_adb()
                 self._check_monitoring()
+                self._check_fileless_malware()
+                self._check_process_injection()
+                if cycle % 3 == 0:
+                    self._check_cryptominer()
+                if cycle % 5 == 0:
+                    self._check_fork_bomb()
+                cycle += 1
                 time.sleep(2)
             except Exception: pass
     def _prime_dns(self):
@@ -311,20 +325,33 @@ class NetworkMonitor(QtCore.QObject):
 
                     # Check known monitoring tool names
                     base = os.path.splitext(pname)[0]
-                    severity_label = "HIGH"
                     if base in KNOWN_SPY:
-                        severity_label = "HIGH"
                         suspicious.append((proc.info["pid"], pname, cmdline[:120], "spyware"))
                     elif base in KNOWN_FORENSIC:
-                        severity_label = "MEDIUM"
                         suspicious.append((proc.info["pid"], pname, cmdline[:120], "forensic"))
 
-                    # Check for /dev/input readers (keyloggers)
+                    # Behavioral: check for /dev/input readers (keyloggers)
                     try:
                         for fd_path in proc.open_files():
                             if "dev/input" in fd_path.path:
                                 suspicious.append((proc.info["pid"], pname, f"lendo {fd_path.path}", "keylogger"))
                     except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        pass
+
+                    # Behavioral: check for ptrace (TracerPid in /proc/pid/status)
+                    try:
+                        with open(f"/proc/{proc.info['pid']}/status") as stf:
+                            for line in stf:
+                                if line.startswith("TracerPid:"):
+                                    tpid = line.split(":")[1].strip()
+                                    if tpid and tpid != "0":
+                                        suspicious.append((
+                                            proc.info["pid"], pname,
+                                            f"being traced by PID {tpid}",
+                                            "backdoor"
+                                        ))
+                                    break
+                    except Exception:
                         pass
 
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -335,8 +362,12 @@ class NetworkMonitor(QtCore.QObject):
                 if key in self._monitoring_alerted:
                     continue
                 self._monitoring_alerted.add(key)
-                labels = {"spyware": "Spyware", "forensic": "Ferramenta Forense", "keylogger": "Keylogger"}
-                severities = {"spyware": "HIGH", "forensic": "MEDIUM", "keylogger": "HIGH"}
+                labels = {
+                    "spyware": "Spyware", "forensic": "Ferramenta Forense",
+                    "keylogger": "Keylogger", "backdoor": "Possivel Backdoor/C2",
+                }
+                severities = {"spyware": "HIGH", "forensic": "MEDIUM",
+                              "keylogger": "HIGH", "backdoor": "HIGH"}
                 severity = severities.get(stype, "MEDIUM")
                 self.alert_signal.emit(severity,
                     f"[{labels.get(stype, stype)}] PID {pid}: {name} - {detail}")
@@ -363,7 +394,7 @@ class NetworkMonitor(QtCore.QObject):
             try:
                 r = subprocess.run(["lsmod"], capture_output=True, text=True,
                                  encoding="utf-8", errors="surrogateescape", timeout=3)
-                sus_modules = {"kprobe", "kretprobe", "systemtap", "ftrace", "kvm_intel"}
+                sus_modules = {"systemtap"}
                 for line in r.stdout.splitlines():
                     mod = line.split()[0].lower() if line.split() else ""
                     if mod in sus_modules:
@@ -374,6 +405,184 @@ class NetworkMonitor(QtCore.QObject):
             except Exception:
                 pass
 
+            # Behavioral: check /proc for processes accessing /dev/mem or /dev/kmem
+            try:
+                r = subprocess.run(
+                    ["lsof", "/dev/mem", "/dev/kmem", "/dev/port"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                for line in r.stdout.splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        spid = parts[1]
+                        sname = parts[0] if len(parts) > 0 else "?"
+                        key = f"mem_{spid}"
+                        if key not in self._monitoring_alerted:
+                            self._monitoring_alerted.add(key)
+                            self.alert_signal.emit("HIGH",
+                                f"[Memory Access] PID {spid} ({sname}) acessando {parts[-1]}")
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+    def _check_cryptominer(self):
+        try:
+            import psutil
+            now = time.time()
+            for proc in psutil.process_iter(["pid", "name", "cpu_percent", "connections", "exe"]):
+                try:
+                    pid = proc.info["pid"]
+                    cpu = proc.cpu_percent(interval=0)
+                    name = (proc.info["name"] or "").lower()
+                    exe = (proc.info["exe"] or "").lower()
+                    if any(kw in name for kw in ("python3", "python", "bash", "zsh", "systemd", " snap")):
+                        continue
+                    if cpu < 50:
+                        continue
+                    hist = self._cpu_history[pid]
+                    hist["samples"].append((now, cpu))
+                    hist["total_cpu"] += cpu
+                    hist["samples"] = [s for s in hist["samples"] if now - s[0] < 30]
+                    if len(hist["samples"]) < 3:
+                        continue
+                    avg_cpu = sum(s[1] for s in hist["samples"]) / len(hist["samples"])
+                    if avg_cpu < 60:
+                        continue
+                    conns = proc.connections()
+                    miner_ports = {3333, 3334, 3335, 3336, 4444, 5555, 7777, 8888,
+                                   14444, 33445, 42000, 42001, 42002}
+                    mining_pool = False
+                    for c in conns:
+                        if c.raddr and c.raddr.port in miner_ports:
+                            mining_pool = True
+                            break
+                    gpu_files = False
+                    try:
+                        for f in proc.open_files():
+                            if "nvidia" in f.path.lower() or "dri" in f.path.lower() or "render" in f.path.lower():
+                                gpu_files = True
+                                break
+                    except Exception:
+                        pass
+                    if mining_pool or gpu_files:
+                        if pid not in self._miner_alerted:
+                            self._miner_alerted.add(pid)
+                            detail = f"CPU:{avg_cpu:.0f}%"
+                            if mining_pool:
+                                detail += " pool_miner"
+                            if gpu_files:
+                                detail += " gpu_access"
+                            self.alert_signal.emit("HIGH",
+                                f"[Cryptominer] PID {pid}: {name} - {detail}")
+                            self._fire_intrusion("HIGH",
+                                f"{name} ({detail})", "Cryptominer", "localhost")
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _check_fork_bomb(self):
+        try:
+            import psutil
+            now = time.time()
+            ppids = defaultdict(int)
+            for proc in psutil.process_iter(["pid", "ppid"]):
+                try:
+                    ppids[proc.info["ppid"]] += 1
+                except Exception:
+                    continue
+            for ppid, n_children in ppids.items():
+                if n_children < 100:
+                    continue
+                try:
+                    pname = psutil.Process(ppid).name()
+                except Exception:
+                    pname = "?"
+                if pname in ("systemd", "init", "kthreadd"):
+                    continue
+                key = f"fork_{ppid}"
+                hist = self._fork_history[ppid]
+                if hist["count"] == 0:
+                    hist["first"] = now
+                hist["count"] += n_children
+                if now - hist["first"] > 10:
+                    if hist["count"] >= 100 and key not in self._fork_alerted:
+                        self._fork_alerted.add(key)
+                        self.alert_signal.emit("HIGH",
+                            f"[Fork Bomb] PID {ppid} ({pname}) criou {hist['count']} processos em 10s")
+                        self._fire_intrusion("HIGH",
+                            f"PID {ppid} ({pname}) criou {hist['count']} processos", "ForkBomb", "localhost")
+                    hist["count"] = 0
+                    hist["first"] = now
+        except Exception:
+            pass
+
+    def _check_fileless_malware(self):
+        try:
+            import psutil
+            for proc in psutil.process_iter(["pid", "name", "exe", "cmdline", "memory_maps"]):
+                try:
+                    pid = proc.info["pid"]
+                    name = proc.info["name"] or "?"
+                    exe = proc.info.get("exe") or ""
+                    cmdline = " ".join(proc.info["cmdline"] or [])
+                    if name.startswith("kworker") or name.startswith("kthread"):
+                        continue
+                    if pid < 100 and exe == "":
+                        continue
+                    if exe == "" and cmdline == "":
+                        continue
+                    if "memfd:" in exe.lower() or "(deleted)" in exe.lower() or exe == "":
+                        if pid not in self._fileless_alerted:
+                            self._fileless_alerted.add(pid)
+                            self.alert_signal.emit("HIGH",
+                                f"[Fileless] PID {pid}: {name} - exe={exe} cmd={cmdline[:100]}")
+                            self._fire_intrusion("HIGH",
+                                f"PID {pid} ({name}) fileless: {exe}", "FilelessMalware", "localhost")
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _check_process_injection(self):
+        try:
+            import psutil
+            for proc in psutil.process_iter(["pid", "name"]):
+                try:
+                    pid = proc.info["pid"]
+                    for f in proc.open_files():
+                        path = f.path
+                        if "/proc/" in path and "/mem" in path:
+                            parts = path.split("/")
+                            target_pid = None
+                            for i, p in enumerate(parts):
+                                if p == "proc" and i + 2 < len(parts):
+                                    try:
+                                        tp = int(parts[i + 1])
+                                        if tp != pid:
+                                            target_pid = tp
+                                    except ValueError:
+                                        pass
+                                    break
+                            if target_pid is not None:
+                                key = f"inj_{pid}_{target_pid}"
+                                if key not in self._inj_alerted:
+                                    self._inj_alerted.add(key)
+                                    tname = "?"
+                                    try:
+                                        tname = psutil.Process(target_pid).name()
+                                    except Exception:
+                                        pass
+                                    self.alert_signal.emit("HIGH",
+                                        f"[Process Injection] PID {pid} ({proc.info['name']}) "
+                                        f"escrevendo em /proc/{target_pid}/mem ({tname})")
+                                    self._fire_intrusion("HIGH",
+                                        f"PID {pid} injetando em PID {target_pid} ({tname})",
+                                        "ProcessInjection", "localhost")
+                except Exception:
+                    continue
         except Exception:
             pass
 

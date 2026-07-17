@@ -86,6 +86,8 @@ LANGS = {
             "openvpn": "openvpn (VPN)",
             "nmap": "nmap (scan de rede)",
             "lsof": "lsof (monitor de portas)",
+            "bcc": "bpfcc (monitor eBPF kernel)",
+            "linux-headers": "linux-headers (headers do kernel)",
         },
         "sudo_title": "Permissões de Root",
         "sudo_desc": "Algumas funcionalidades precisam de root:\n• Firewall (iptables)\n• DNS-over-HTTPS (resolvectl)\n• Bloqueio de webcam (modprobe)\n• ARP scan",
@@ -132,6 +134,8 @@ LANGS = {
             "openvpn": "openvpn (VPN)",
             "nmap": "nmap (network scan)",
             "lsof": "lsof (port monitor)",
+            "bcc": "bpfcc (eBPF kernel monitor)",
+            "linux-headers": "linux-headers (kernel headers)",
         },
         "sudo_title": "Root Permissions",
         "sudo_desc": "Some features require root:\n• Firewall (iptables)\n• DNS-over-HTTPS (resolvectl)\n• Webcam block (modprobe)\n• ARP scan",
@@ -178,6 +182,8 @@ LANGS = {
             "openvpn": "openvpn (VPN)",
             "nmap": "nmap (scan de red)",
             "lsof": "lsof (monitor de puertos)",
+            "bcc": "bpfcc (monitor kernel eBPF)",
+            "linux-headers": "linux-headers (headers del kernel)",
         },
         "sudo_title": "Permisos de Root",
         "sudo_desc": "Algunas funciones requieren root:\n• Firewall (iptables)\n• DNS-over-HTTPS (resolvectl)\n• Bloqueo webcam (modprobe)\n• ARP scan",
@@ -224,6 +230,8 @@ LANGS = {
             "openvpn": "openvpn (VPN)",
             "nmap": "nmap (scan réseau)",
             "lsof": "lsof (moniteur ports)",
+            "bcc": "bpfcc (moniteur kernel eBPF)",
+            "linux-headers": "linux-headers (en-têtes noyau)",
         },
         "sudo_title": "Permissions Root",
         "sudo_desc": "Certaines fonctions nécessitent root :\n• Pare-feu (iptables)\n• DNS-over-HTTPS (resolvectl)\n• Blocage webcam (modprobe)\n• Scan ARP",
@@ -270,6 +278,8 @@ LANGS = {
             "openvpn": "openvpn (VPN)",
             "nmap": "nmap (Netzwerkscan)",
             "lsof": "lsof (Portmonitor)",
+            "bcc": "bpfcc (eBPF-Kernel-Monitor)",
+            "linux-headers": "linux-headers (Kernel-Header)",
         },
         "sudo_title": "Root-Berechtigungen",
         "sudo_desc": "Einige Funktionen benötigen root:\n• Firewall (iptables)\n• DNS-over-HTTPS (resolvectl)\n• Webcam-Sperre (modprobe)\n• ARP-Scan",
@@ -316,6 +326,8 @@ LANGS = {
             "openvpn": "openvpn (VPN)",
             "nmap": "nmap (scan rete)",
             "lsof": "lsof (monitor porte)",
+            "bcc": "bpfcc (monitor kernel eBPF)",
+            "linux-headers": "linux-headers (header del kernel)",
         },
         "sudo_title": "Permessi di Root",
         "sudo_desc": "Alcune funzioni richiedono root:\n• Firewall (iptables)\n• DNS-over-HTTPS (resolvectl)\n• Blocco webcam (modprobe)\n• Scan ARP",
@@ -362,6 +374,8 @@ LANGS = {
             "openvpn": "openvpn (VPN)",
             "nmap": "nmap (сканирование сети)",
             "lsof": "lsof (монитор портов)",
+            "bcc": "bpfcc (монитор ядра eBPF)",
+            "linux-headers": "linux-headers (заголовки ядра)",
         },
         "sudo_title": "Права Root",
         "sudo_desc": "Некоторые функции требуют root:\n• Файрвол (iptables)\n• DNS-over-HTTPS (resolvectl)\n• Блокировка веб-камеры (modprobe)\n• ARP сканирование",
@@ -411,6 +425,10 @@ def check_optional():
     opt = {}
     for cmd in ["firejail", "openvpn", "nmap", "lsof"]:
         opt[cmd] = shutil.which(cmd) is not None
+    r = subprocess.run(["python3", "-c", "import bcc"], capture_output=True, text=True)
+    opt["bcc"] = r.returncode == 0
+    kv = subprocess.run(["uname", "-r"], capture_output=True, text=True).stdout.strip()
+    opt["linux-headers"] = os.path.exists(f"/lib/modules/{kv}/build")
     return opt
 
 def run_with_sudo(cmd):
@@ -805,8 +823,15 @@ StartupNotify=true
                 self.log.append(_("installing_opt"))
                 to_install = []
                 opt = check_optional()
-                for pkg, ok in opt.items():
-                    if not ok: to_install.append(pkg)
+                for key, ok in opt.items():
+                    if ok:
+                        continue
+                    if key == "bcc":
+                        to_install.append("python3-bpfcc")
+                    elif key == "linux-headers":
+                        to_install.append(f"linux-headers-{subprocess.run(['uname','-r'], capture_output=True, text=True).stdout.strip()}")
+                    else:
+                        to_install.append(key)
                 if to_install:
                     self.log.append(f"  Instalando: {' '.join(to_install)}")
                     pm = detect_pkg_manager()
