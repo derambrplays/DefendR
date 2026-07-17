@@ -1,5 +1,5 @@
 # Tools: shredder, software updater, cleanup, password manager, VPN
-import os, subprocess, json, random, hashlib, base64, threading, shutil, re, uuid
+import os, subprocess, json, random, hashlib, base64, threading, shutil, re, uuid, datetime
 from pathlib import Path
 import tempfile
 from PyQt5 import QtCore

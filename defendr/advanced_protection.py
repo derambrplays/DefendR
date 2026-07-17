@@ -108,7 +108,7 @@ class AntiExploit(QtCore.QObject):
                 env = f.read().split("\0")
             for key in self._known_exploit_indicators:
                 for e in env:
-                    if e.startswith(key + "=") and not e.startswith(f"{key}="):
+                    if e.startswith(key + "=") and len(e) > len(key) + 1:
                         self._dedup_emit("HIGH",
                             f"Possivel exploit: {key} injetado no environment")
         except Exception:
@@ -194,7 +194,7 @@ class MemoryScanner(QtCore.QObject):
     def _scan_processes(self):
         try:
             import psutil
-            suspicious_names = {"nc", "ncat", "bash", "sh", "python3", "perl",
+            suspicious_names = {"nc", "ncat", "perl",
                                 "ruby", "nmap", "masscan", "hydra", "medusa",
                                 "msfconsole", "meterpreter", "cobaltstrike"}
             for proc in psutil.process_iter(["pid", "name"]):
@@ -321,7 +321,7 @@ class BehavioralProtection(QtCore.QObject):
                                                     if now - t < 5]
                     # Check for rapid fork
                     suspicious_names = {
-                        "python3", "perl", "bash", "sh", "nc", "ncat",
+                        "perl", "nc", "ncat",
                         "nmap", "masscan", "hydra", "medusa",
                     }
                     if name in suspicious_names and len(self._process_births[ppid]) > 5:
@@ -355,7 +355,7 @@ class BehavioralProtection(QtCore.QObject):
     def _check_suspicious_procs(self):
         try:
             import psutil
-            sus_names = {"nc", "ncat", "bash", "sh", "python3", "perl",
+            sus_names = {"nc", "ncat", "perl",
                          "ruby", "php", "nmap", "masscan", "hydra", "medusa"}
             for proc in psutil.process_iter(["pid", "name", "connections"]):
                 try:

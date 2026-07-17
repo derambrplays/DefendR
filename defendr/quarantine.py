@@ -25,11 +25,13 @@ class QuarantineManager:
         except shutil.Error:
             shutil.copy2(str(fpath), dest)
             os.remove(str(fpath))
+        with open(dest, "rb") as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
         meta = {
             "original": str(fpath.resolve()),
             "quarantined": dest,
             "date": datetime.now().isoformat(),
-            "hash": hashlib.sha256(open(dest, "rb").read()).hexdigest(),
+            "hash": file_hash,
             "size": os.path.getsize(dest),
         }
         self.metadata[qid] = meta
@@ -52,9 +54,14 @@ class QuarantineManager:
     def delete_permanently(self, qid):
         if qid not in self.metadata: return False, "ID not found"
         info = self.metadata[qid]
-        if os.path.exists(info["quarantined"]): os.remove(info["quarantined"])
+        if os.path.exists(info["quarantined"]):
+            try:
+                os.remove(info["quarantined"])
+            except OSError as e:
+                return False, f"Falha ao excluir: {e}"
         del self.metadata[qid]
         self._save_meta()
         return True, "Deleted"
     def list_quarantined(self):
+        self.metadata = self._load_meta()
         return list(self.metadata.items())

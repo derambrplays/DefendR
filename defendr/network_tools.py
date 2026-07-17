@@ -17,7 +17,10 @@ class NetworkInspector(QtCore.QObject):
                 for line in r.stdout.split("\n"):
                     if "default" in line:
                         parts = line.split()
-                        interface = parts[-1] if len(parts) > 4 else None
+                        if "dev" in parts:
+                            interface = parts[parts.index("dev") + 1]
+                        else:
+                            interface = parts[-1] if len(parts) > 4 else None
                         break
             if not interface: interface = "eth0"
             import re as _re

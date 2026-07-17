@@ -7,6 +7,9 @@ from defendr.lang import _
 from defendr.constants import CONFIG_DIR
 
 def main():
+    if "--restart" in sys.argv:
+        import time
+        time.sleep(0.5)
     LOCK_PORT = 48123
     lock_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     lock_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -39,16 +42,16 @@ def main():
     app.setFont(font)
 
     splash = SplashScreen()
-    splash.draw(_("DefendR - Advanced Protection"), 0)
+    splash.draw(_("Initializing..."), 0)
     app.processEvents()
 
     splash_steps = [
-        (5, _("Initializing engine...")),
-        (20, _("Loading signatures...")),
-        (40, _("Starting modules...")),
-        (60, _("Configuring firewall...")),
-        (80, _("Preparing interface...")),
-        (95, _("Almost ready...")),
+        (6, _("Initializing engine...")),
+        (22, _("Loading signatures...")),
+        (42, _("Starting modules...")),
+        (62, _("Configuring firewall...")),
+        (82, _("Preparing interface...")),
+        (97, _("Almost ready...")),
     ]
     splash_idx = [0]
 
@@ -60,10 +63,7 @@ def main():
         else:
             timer.stop()
             window = MainWindow()
-            splash.draw(_("DefendR - Advanced Protection"), 100)
-            app.processEvents()
             splash.finish(window)
-            window.show()
 
             def listen_raise():
                 while True:
@@ -83,7 +83,7 @@ def main():
 
     timer = QtCore.QTimer()
     timer.timeout.connect(advance_splash)
-    timer.start(1100)
+    timer.start(600)
     sys.exit(app.exec())
 
 if __name__ == "__main__":

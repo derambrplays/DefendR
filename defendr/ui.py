@@ -15,6 +15,89 @@ from defendr.scheduler import Scheduler, SignatureUpdater
 from defendr.lang import _
 from defendr.telemetry import TelemetryClient
 
+ALERT_SOUND = "/home/kalleb/Downloads/new-ford-chime.mp3"
+
+def _play_alert_sound():
+    try:
+        uid = int(os.environ.get("PKEXEC_UID") or os.environ.get("SUDO_UID") or str(os.getuid()))
+        if uid != os.geteuid():
+            import pwd
+            user = pwd.getpwuid(uid).pw_name
+            pulse_server = f"unix:/run/user/{uid}/pulse/native"
+            subprocess.Popen(
+                ["/usr/sbin/runuser", "-u", user, "--",
+                 "env", f"PULSE_SERVER={pulse_server}",
+                 "play", "-q", ALERT_SOUND, "trim", "0", "2"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(["play", "-q", ALERT_SOUND, "trim", "0", "2"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+class DropZone(QtWidgets.QLabel):
+    dropped = QtCore.pyqtSignal(str)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setAlignment(QtCore.Qt.AlignCenter)
+        self.setText("🎯 Arraste um arquivo aqui\npara escanear")
+        self.setStyleSheet(f"""
+            QLabel {{
+                background: rgba(44,44,46,0.4);
+                border: 2px dashed {BORDER};
+                border-radius: 16px;
+                color: {TEXT_DIM};
+                font-size: 14px;
+                padding: 40px;
+            }}
+            QLabel:hover {{
+                border-color: {ACCENT};
+                color: {TEXT};
+                background: rgba(124,77,255,0.08);
+            }}
+        """)
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self.setStyleSheet(f"""
+                QLabel {{
+                    background: rgba(124,77,255,0.12);
+                    border: 2px solid {ACCENT};
+                    border-radius: 16px;
+                    color: {ACCENT_LIGHT};
+                    font-size: 14px;
+                    padding: 40px;
+                }}
+            """)
+    def dragLeaveEvent(self, event):
+        self.setStyleSheet(f"""
+            QLabel {{
+                background: rgba(44,44,46,0.4);
+                border: 2px dashed {BORDER};
+                border-radius: 16px;
+                color: {TEXT_DIM};
+                font-size: 14px;
+                padding: 40px;
+            }}
+        """)
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            if os.path.isfile(path):
+                self.dropped.emit(path)
+        self.setStyleSheet(f"""
+            QLabel {{
+                background: rgba(44,44,46,0.4);
+                border: 2px dashed {BORDER};
+                border-radius: 16px;
+                color: {TEXT_DIM};
+                font-size: 14px;
+                padding: 40px;
+            }}
+        """)
+
 # ===================== QTHREAD WORKERS =====================
 class TaskWorker(QtCore.QThread):
     """Generic worker for running heavy tasks in background thread."""
@@ -39,6 +122,7 @@ class ScanWorker(QtCore.QThread):
     finished = QtCore.pyqtSignal(object)
     progress = QtCore.pyqtSignal(int, str)
     error = QtCore.pyqtSignal(str)
+    result_found = QtCore.pyqtSignal(object)
 
     def __init__(self, engine, path, mode="rapido"):
         super().__init__()
@@ -62,11 +146,10 @@ class ScanWorker(QtCore.QThread):
         combined = {"malicious": [], "suspicious": [], "pentest": [], "safe": 0, "errors": []}
         def on_progress(count, msg):
             self.progress.emit(count, msg)
+        def on_result(r):
+            self.result_found.emit(r)
         for path in paths:
-            if self.mode == "completo":
-                result = self.engine.scan_completo(path, progress_cb=on_progress)
-            else:
-                result = self.engine.scan_rapido(path, progress_cb=on_progress)
+            result = self.engine.scan_with_level(path, level=self.mode, progress_cb=on_progress, result_cb=on_result)
             combined["malicious"].extend(result.get("malicious", []))
             combined["suspicious"].extend(result.get("suspicious", []))
             combined["pentest"].extend(result.get("pentest", []))
@@ -115,45 +198,151 @@ class ScanWorker(QtCore.QThread):
         self._hd_proc = None
         self.finished.emit(combined)
 
-class SplashScreen(QtWidgets.QSplashScreen):
+class SplashScreen(QtWidgets.QWidget):
     def __init__(self):
-        self._icon_path = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
+        super().__init__()
+        self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.Tool)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.setFixedSize(520, 380)
+
+        screen = QtWidgets.QApplication.primaryScreen().geometry()
+        x = (screen.width() - 520) // 2
+        y = (screen.height() - 380) // 2
+        self.setGeometry(x, y, 520, 380)
+
         splash_img = os.path.join(os.path.dirname(__file__), "splash.png")
         if os.path.exists(splash_img):
-            pixmap = QtGui.QPixmap(splash_img)
+            self._bg = QtGui.QPixmap(splash_img)
         else:
-            pixmap = QtGui.QPixmap(500, 300)
-            pixmap.fill(QtGui.QColor(DARK_BG))
-        super().__init__(pixmap)
+            self._bg = None
+        self._progress = 0.0
+        self._target = 0.0
+        self._message = ""
+
+        self._anim_timer = QtCore.QTimer()
+        self._anim_timer.timeout.connect(self._tick)
+        self._anim_timer.start(16)
+
         self.setStyleSheet("background: transparent;")
         self.show()
 
-    def draw(self, message, progress=0):
-        splash_img = os.path.join(os.path.dirname(__file__), "splash.png")
-        pix = QtGui.QPixmap(splash_img) if os.path.exists(splash_img) else QtGui.QPixmap(500, 300)
-        if not os.path.exists(splash_img):
-            pix.fill(QtGui.QColor(DARK_BG))
-        p = QtGui.QPainter(pix)
-        p.setRenderHint(QtGui.QPainter.Antialiasing)
-        # Draw progress bar overlay at bottom
-        bar_x, bar_y, bar_w, bar_h = 50, pix.height() - 50, pix.width() - 100, 8
-        p.setPen(QtCore.Qt.NoPen)
-        p.setBrush(QtGui.QColor(0, 0, 0, 100))
-        p.drawRoundedRect(bar_x - 2, bar_y - 2, bar_w + 4, bar_h + 4, 6, 6)
-        p.setBrush(QtGui.QColor(DARK_MID))
-        p.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 4, 4)
-        if progress > 0:
-            p.setBrush(QtGui.QColor(ACCENT))
-            p.drawRoundedRect(bar_x, bar_y, int(bar_w * progress / 100), bar_h, 4, 4)
-        # Draw message
-        if message:
-            p.setPen(QtGui.QColor(255, 255, 255, 200))
-            fnt = QtGui.QFont("-apple-system", 11)
-            p.setFont(fnt)
-            p.drawText(QtCore.QRect(0, bar_y - 25, pix.width(), 20), QtCore.Qt.AlignCenter, message)
-        p.end()
-        self.setPixmap(pix)
+    def draw(self, message, target=0):
+        self._message = message
+        self._target = float(target)
+
+    def finish(self, widget):
+        self._target = 100
+        self._message = ""
         self.repaint()
+        widget.show()
+        QtCore.QTimer.singleShot(300, self.close)
+
+    def _tick(self):
+        diff = self._target - self._progress
+        if abs(diff) > 0.5:
+            self._progress += diff * 0.12
+        else:
+            self._progress = self._target
+        self.repaint()
+
+    def paintEvent(self, event):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+
+        w, h = self.width(), self.height()
+        r = 24
+
+        p.setBrush(QtGui.QColor(0, 0, 0, 100))
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawRoundedRect(self.rect().adjusted(2, 6, -2, -2), r, r)
+
+        p.setBrush(QtGui.QColor(DARK_BG))
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), r, r)
+
+        clip_rect = self.rect().adjusted(2, 2, -2, -2)
+        p.setClipRect(clip_rect)
+        p.setClipping(True)
+
+        if self._bg:
+            scaled = self._bg.scaled(w - 4, h - 4, QtCore.Qt.KeepAspectRatioByExpanding, QtCore.Qt.SmoothTransformation)
+            sx = (w - 4 - scaled.width()) // 2
+            sy = (h - 4 - scaled.height()) // 2
+            p.setOpacity(0.15)
+            p.drawPixmap(sx + 2, sy + 2, scaled)
+
+        p.setOpacity(1.0)
+        p.setClipping(False)
+
+        grad = QtGui.QLinearGradient(0, 0, w, 0)
+        grad.setColorAt(0.0, QtGui.QColor(ACCENT))
+        grad.setColorAt(0.5, QtGui.QColor(ACCENT_LIGHT))
+        grad.setColorAt(1.0, QtGui.QColor(ACCENT))
+        p.setBrush(grad)
+        p.drawRoundedRect(QtCore.QRect(22, 22, w - 44, 3), 2, 2)
+
+        icon_size = 72
+        icon_path = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/defendr.png")
+        if os.path.exists(icon_path):
+            icon_pix = QtGui.QPixmap(icon_path)
+            scaled_icon = icon_pix.scaled(icon_size, icon_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            ix = (w - scaled_icon.width()) // 2
+            p.drawPixmap(ix, 40, scaled_icon)
+        else:
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(QtGui.QColor(ACCENT))
+            shield_r = QtCore.QRect((w - icon_size)//2, 40, icon_size, icon_size)
+            p.drawRoundedRect(shield_r, 14, 14)
+            p.setPen(QtGui.QColor(TEXT))
+            sf = QtGui.QFont("Segoe UI", 30, QtGui.QFont.Bold)
+            p.setFont(sf)
+            p.drawText(shield_r, QtCore.Qt.AlignCenter, "D")
+
+        p.setPen(QtGui.QColor(TEXT))
+        tf = QtGui.QFont("Segoe UI", 26, QtGui.QFont.Bold)
+        p.setFont(tf)
+        p.drawText(QtCore.QRect(0, 122, w, 50), QtCore.Qt.AlignCenter, "DefendR")
+
+        p.setPen(QtGui.QColor(ACCENT_LIGHT))
+        sf2 = QtGui.QFont("Segoe UI", 12)
+        p.setFont(sf2)
+        p.drawText(QtCore.QRect(0, 166, w, 25), QtCore.Qt.AlignCenter, "Advanced Protection")
+
+        p.setPen(QtGui.QColor(150, 150, 150))
+        vf = QtGui.QFont("Segoe UI", 9)
+        p.setFont(vf)
+        p.drawText(QtCore.QRect(0, 188, w, 20), QtCore.Qt.AlignCenter, "v2.0.0")
+
+        bar_x, bar_y = 50, 250
+        bar_w, bar_h = w - 100, 6
+
+        p.setBrush(QtGui.QColor(DARK_MID))
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 3, 3)
+
+        pct = max(0, min(100, self._progress))
+        if pct > 0:
+            fill_w = int(bar_w * pct / 100)
+            if fill_w > 0:
+                g2 = QtGui.QLinearGradient(bar_x, 0, bar_x + bar_w, 0)
+                g2.setColorAt(0.0, QtGui.QColor(ACCENT))
+                g2.setColorAt(1.0, QtGui.QColor(ACCENT_LIGHT))
+                p.setBrush(g2)
+                p.drawRoundedRect(bar_x, bar_y, fill_w, bar_h, 3, 3)
+
+        p.setPen(QtGui.QColor(ACCENT_LIGHT))
+        pf = QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold)
+        p.setFont(pf)
+        p.drawText(QtCore.QRect(bar_x, bar_y - 22, bar_w, 20), QtCore.Qt.AlignCenter, f"{int(pct)}%")
+
+        if self._message:
+            p.setPen(QtGui.QColor(200, 200, 200))
+            mf = QtGui.QFont("Segoe UI", 10)
+            p.setFont(mf)
+            p.drawText(QtCore.QRect(20, bar_y + 18, w - 40, 20), QtCore.Qt.AlignCenter, self._message)
+
+        p.end()
 
 class IntrusionPopup(QtWidgets.QWidget):
     def __init__(self, title, message, severity="HIGH", source_ip="", attack_type="", parent=None):
@@ -232,8 +421,12 @@ class IntrusionPopup(QtWidgets.QWidget):
         # Notification sound (Avast-style alert)
         try:
             import subprocess
-            snd = os.path.join(os.path.dirname(__file__), "alert.wav")
-            subprocess.run(["paplay", snd], capture_output=True, timeout=2)
+            snd = "/home/kalleb/Downloads/new-ford-chime.mp3"
+            player = "mpg123"
+            if not os.path.exists(snd):
+                snd = os.path.join(os.path.dirname(__file__), "alert.wav")
+                player = "paplay"
+            subprocess.run([player, snd], capture_output=True, timeout=2)
         except Exception:
             QtWidgets.QApplication.beep()
 
@@ -300,10 +493,20 @@ class StatCard(QtWidgets.QFrame):
         self.value_lbl.setText(str(val))
 
 class MainWindow(QtWidgets.QMainWindow):
+    desktop_scan_done = QtCore.pyqtSignal(object)
+    desktop_scan_error = QtCore.pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.engine = DefendREngine()
         self.netmon = NetworkMonitor()
+        try:
+            from defendr.reputation import DEFAULT_SERVER_IP
+            self.netmon.trusted_ips.add(DEFAULT_SERVER_IP)
+        except Exception:
+            pass
+        self.desktop_scan_done.connect(self._on_desktop_scan_done)
+        self.desktop_scan_error.connect(self._on_desktop_scan_error)
         self.netmon.alert_signal.connect(self._on_net_alert)
         self.netmon.data_signal.connect(self._on_net_data)
         self.netmon.intrusion_signal.connect(self._on_net_intrusion)
@@ -351,6 +554,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cleanup_mgr.preview_signal.connect(self._on_cleanup_preview)
         self.telemetry = TelemetryClient()
         self.enterprise_mode = False
+        self.autostart_enabled = False
+        self._autostart_path = os.path.expanduser("~/.config/autostart/defendr.desktop")
         self.selfprotect = SelfProtection(os.getpid())
         self.selfprotect.alert_signal.connect(self._on_selfprotect_alert)
         self.adv_protection = AdvancedProtection()
@@ -368,7 +573,59 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._setup_ui()
         self._setup_tray()
+        self.protection_level = self.engine.config_data.get("protection_level", "medium")
+        self._update_protect_buttons()
+        self._update_protect_label()
         self._start_monitors()
+        self._auto_start_cloud_server()
+
+    def _update_protect_buttons(self):
+        level = getattr(self, 'protection_level', 'medium')
+        for frame, key in self.prot_level_btns:
+            active = key == level
+            frame.setStyleSheet(f"""
+                background: rgba(255,255,255,{0.08 if active else 0});
+                border: 2px solid {ACCENT if active else 'transparent'};
+                border-radius: 10px;
+                padding: 8px;
+            """ if active else "background: transparent;")
+
+    def _set_protection_level(self, level):
+        self.protection_level = level
+        self.engine.config_data["protection_level"] = level
+        try:
+            from defendr.filelock import safe_json_write
+            safe_json_write(self.engine.config_file, self.engine.config_data)
+        except Exception: pass
+        self._update_protect_buttons()
+        basic = level == "basic"
+        medium = level in ("medium", "hard")
+        hard = level == "hard"
+        self.rt_protector.stop() if hasattr(self.rt_protector, 'active') and self.rt_protector.active else None
+        self.rt_protector.start()
+        if basic:
+            self.ransomware.stop()
+            self.webcam_protector.stop()
+            self.adv_protection.stop()
+            self.selfprotect.stop()
+        elif medium:
+            self.ransomware.start()
+            self.webcam_protector.start()
+            self.adv_protection.stop()
+            self.selfprotect.stop()
+        elif hard:
+            self.ransomware.start()
+            self.webcam_protector.start()
+            self.adv_protection.start()
+            self.selfprotect.start()
+        self._update_protect_label()
+
+    def _update_protect_label(self):
+        level = getattr(self, 'protection_level', 'medium')
+        level_map = {"basic": "Basic", "medium": "Medium", "hard": "Hard"}
+        color_map = {"basic": GREEN, "medium": YELLOW, "hard": RED}
+        self.protect_indicator.setText(f"●  {level_map.get(level, 'Medium').upper()}")
+        self.protect_indicator.setStyleSheet(f"font-size: 12px; color: {color_map.get(level, YELLOW)}; background: transparent; font-weight: 600;")
 
     def _update_defendr(self):
         def task():
@@ -397,13 +654,26 @@ class MainWindow(QtWidgets.QMainWindow):
         ))
         w.start()
 
+    def _uninstall_defendr(self):
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        uninstaller = os.path.join(base, "uninstall.py")
+        if os.path.exists(uninstaller):
+            self._cleanup_all()
+            self.hide()
+            self.tray.hide()
+            QtCore.QProcess.startDetached(sys.executable, [uninstaller])
+            QtCore.QTimer.singleShot(500, QtWidgets.qApp.quit)
+
     def _restart_app(self):
         self.tray.showMessage("DefendR", "Reiniciando...", QtWidgets.QSystemTrayIcon.Information, 2000)
-        QtCore.QTimer.singleShot(500, lambda: (
-            self._cleanup_all(),
-            QtCore.QProcess.startDetached(sys.executable, sys.argv)
+        self._cleanup_all()
+        args = list(sys.argv)
+        if "--restart" not in args:
+            args.append("--restart")
+        QtCore.QTimer.singleShot(2000, lambda: (
+            QtCore.QProcess.startDetached(sys.executable, args),
+            QtWidgets.qApp.quit()
         ))
-        QtCore.QTimer.singleShot(1000, QtWidgets.qApp.quit)
 
     def _cleanup_all(self):
         self.monitor_timer.stop()
@@ -419,6 +689,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.firewall.disable()
         self.engine.stop()
         self.ransomware.stop()
+        if hasattr(self, '_rep_server'):
+            self._rep_server.stop()
 
     def closeEvent(self, event):
         if self.game_mode.suppress_notifications():
@@ -488,6 +760,8 @@ class MainWindow(QtWidgets.QMainWindow):
         idx = pages.get(key, 0)
         self.content_stack.setCurrentIndex(idx)
         if key == "network": self._update_dns()
+        for btn, k in self.nav_btns:
+            btn.setChecked(k == key)
 
     # ===================== UI SETUP =====================
     def _setup_ui(self):
@@ -557,13 +831,25 @@ class MainWindow(QtWidgets.QMainWindow):
             ("hdscan","💿",_("HD Scan")),
             ("settings","🔧",_("Settings")),
         ]
-        nav_group = QtWidgets.QButtonGroup()
+        nav_tooltips = {
+            "dashboard": "Visão geral do sistema, status de proteção e ações rápidas",
+            "scanner": "Escaneie arquivos e pastas em busca de malware",
+            "realtime": "Proteção em tempo real: monitoramento do sistema, anti-ransomware, webcam",
+            "firewall": "Gerencie regras de firewall iptables",
+            "network": "Monitoramento de rede, inspetor, VPN e DNS",
+            "processes": "Monitore processos em execução",
+            "quarantine": "Visualize e gerencie arquivos em quarentena",
+            "tools": "Sandbox, detecção de rootkit, gerenciador de senhas e mais",
+            "reporterror": "Login, registro e envio de relatórios de erro",
+            "hdscan": "Escaneie o HD inteiro com recomendações",
+            "settings": "Configure o comportamento do DefendR",
+        }
         for key, icon, label in nav_items:
             btn = SidebarButton(label, icon)
+            btn.setToolTip(nav_tooltips.get(key, ""))
             btn.clicked.connect(lambda checked, k=key: self._switch_page(k))
-            nav_group.addButton(btn)
             sidebar_layout.addWidget(btn)
-            self.nav_btns.append(btn)
+            self.nav_btns.append((btn, key))
         sidebar_layout.addStretch()
 
         # Protection status
@@ -598,7 +884,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_hd_scan()
         self._build_settings()
 
-        self.nav_btns[0].setChecked(True)
+        self.nav_btns[0][0].setChecked(True)
 
     def _page_widget(self):
         w = QtWidgets.QWidget()
@@ -652,6 +938,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ("cpu","🖥","CPU",ACCENT_LIGHT),("mem","💾","Memory",CYAN),
             ("procs","⚙","Processes",YELLOW),("alerts","🚨","Alerts",RED),
             ("scanned","📁","Scanned",GREEN),("threats","🛡","Threats",ACCENT),
+            ("users","👥","Protected",ACCENT_LIGHT),
         ]
         for key, icon, label, color in stat_defs:
             card = StatCard(label, icon, color)
@@ -672,6 +959,89 @@ class MainWindow(QtWidgets.QMainWindow):
         action_layout.addStretch()
         layout.addWidget(action_frame)
 
+        # Protection level
+        prot_frame = QtWidgets.QFrame()
+        prot_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
+        prot_layout = QtWidgets.QVBoxLayout(prot_frame)
+        prot_header = QtWidgets.QLabel("🛡  Protection Level")
+        prot_header.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {TEXT}; background: transparent;")
+        prot_layout.addWidget(prot_header)
+        prot_btn_frame = QtWidgets.QWidget()
+        prot_btn_frame.setStyleSheet("background: transparent;")
+        prot_btn_layout = QtWidgets.QHBoxLayout(prot_btn_frame)
+        prot_btn_layout.setSpacing(8)
+
+        self.prot_level_btns = []
+        prot_levels = [
+            ("basic", "Basic", "RT scan + USB", GREEN),
+            ("medium", "Medium", "+ Network + Ransomware + Webcam", YELLOW),
+            ("hard", "Hard", "+ Rootkit + SelfProtect + Advanced", RED),
+        ]
+        prot_tooltips = {
+            "basic": "Básico: apenas escaneamento em tempo real + verificação de USB",
+            "medium": "Médio: adiciona monitoramento de rede, anti-ransomware e proteção de webcam",
+            "hard": "Máximo: adiciona detecção de rootkit, autoproteção e proteção avançada",
+        }
+        for key, label, desc, color in prot_levels:
+            btn_frame = QtWidgets.QFrame()
+            btn_frame.setStyleSheet("background: transparent;")
+            btn_frame.setCursor(QtCore.Qt.PointingHandCursor)
+            btn_frame.setToolTip(prot_tooltips.get(key, ""))
+            bl = QtWidgets.QVBoxLayout(btn_frame)
+            bl.setAlignment(QtCore.Qt.AlignCenter)
+            bl.setSpacing(2)
+            title = QtWidgets.QLabel(label)
+            title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color}; background: transparent;")
+            title.setAlignment(QtCore.Qt.AlignCenter)
+            bl.addWidget(title)
+            sub = QtWidgets.QLabel(desc)
+            sub.setStyleSheet(f"font-size: 10px; color: {TEXT_DIM}; background: transparent;")
+            sub.setAlignment(QtCore.Qt.AlignCenter)
+            bl.addWidget(sub)
+            btn_frame.mousePressEvent = lambda e, k=key: self._set_protection_level(k)
+            prot_btn_layout.addWidget(btn_frame)
+            self.prot_level_btns.append((btn_frame, key))
+        prot_btn_layout.addStretch()
+        prot_layout.addWidget(prot_btn_frame)
+        layout.addWidget(prot_frame)
+
+        # Joguin IA
+        ia_frame = QtWidgets.QFrame()
+        ia_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
+        ia_layout = QtWidgets.QVBoxLayout(ia_frame)
+        ia_header = QtWidgets.QLabel("🧠  Joguin IA")
+        ia_header.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {ACCENT_LIGHT}; background: transparent;")
+        ia_layout.addWidget(ia_header)
+        ia_row = QtWidgets.QHBoxLayout()
+        self.ia_level_lbl = QtWidgets.QLabel("Level 1")
+        self.ia_level_lbl.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {ACCENT}; background: transparent;")
+        ia_row.addWidget(self.ia_level_lbl)
+        self.ia_xp_bar = QtWidgets.QProgressBar()
+        self.ia_xp_bar.setFixedHeight(8)
+        self.ia_xp_bar.setStyleSheet(f"QProgressBar {{ background: {DARK_MID}; border: none; border-radius: 4px; }} QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT}, stop:1 {ACCENT_LIGHT}); border-radius: 4px; }}")
+        self.ia_xp_bar.setTextVisible(False)
+        ia_row.addWidget(self.ia_xp_bar, 1)
+        self.ia_xp_lbl = QtWidgets.QLabel("0/0 XP")
+        self.ia_xp_lbl.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
+        ia_row.addWidget(self.ia_xp_lbl)
+        ia_layout.addLayout(ia_row)
+        ia_info_row = QtWidgets.QHBoxLayout()
+        self.ia_acc_lbl = QtWidgets.QLabel("🎯 0% accuracy")
+        self.ia_acc_lbl.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
+        ia_info_row.addWidget(self.ia_acc_lbl)
+        self.ia_hash_lbl = QtWidgets.QLabel("📚 0 hashes")
+        self.ia_hash_lbl.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
+        ia_info_row.addWidget(self.ia_hash_lbl)
+        self.ia_pat_lbl = QtWidgets.QLabel("🧩 0 patterns")
+        self.ia_pat_lbl.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
+        ia_info_row.addWidget(self.ia_pat_lbl)
+        ia_info_row.addStretch()
+        ia_layout.addLayout(ia_info_row)
+        self.ia_status_lbl = QtWidgets.QLabel("🤖 Aprendendo com cada scan...")
+        self.ia_status_lbl.setStyleSheet(f"font-size: 11px; color: {TEXT_DIM}; background: transparent;")
+        ia_layout.addWidget(self.ia_status_lbl)
+        layout.addWidget(ia_frame)
+
         # Alerts
         alert_frame = QtWidgets.QFrame()
         alert_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
@@ -681,7 +1051,13 @@ class MainWindow(QtWidgets.QMainWindow):
         alert_layout.addWidget(alert_header)
         self.alert_list = QtWidgets.QListWidget()
         self.alert_list.setStyleSheet(f"QListWidget {{ background: rgba(28,28,30,0.6); border: 1px solid {BORDER}; border-radius: 10px; color: {TEXT}; font-size: 12px; }} QListWidget::item {{ padding: 8px 12px; border-bottom: 1px solid {DARK_MID}; }} QListWidget::item:selected {{ background: {ACCENT}; }}")
+        self.alert_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.alert_list.customContextMenuRequested.connect(self._alert_context_menu)
         alert_layout.addWidget(self.alert_list)
+        alert_actions = QtWidgets.QHBoxLayout()
+        alert_actions.addWidget(self._btn("🗑 Clear", self._clear_alerts))
+        alert_actions.addStretch()
+        alert_layout.addLayout(alert_actions)
         layout.addWidget(alert_frame, 1)
         self.content_stack.addWidget(w)
 
@@ -692,11 +1068,18 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_frame = QtWidgets.QWidget()
         btn_frame.setStyleSheet("background: transparent;")
         btn_layout = QtWidgets.QHBoxLayout(btn_frame)
-        for text, handler in [("📁 Scan File", self._scan_file),("📂 Scan Folder", self._scan_dir),
-                               ("⏹ Stop", self._stop_scan),("🗑 Clear", self._clear_scan),
-                               ("📀 Scan USB", self._scan_usb_manual),
-                               ("🧪 Sandbox", self._run_selected_in_sandbox)]:
-            btn_layout.addWidget(self._btn(text, handler))
+        scan_btns = [
+            ("📁 Scan File", self._scan_file, "Escolha um arquivo para escanear"),
+            ("📂 Scan Folder", self._scan_dir, "Escolha uma pasta para escanear todos os arquivos"),
+            ("⏹ Stop", self._stop_scan, "Para o escaneamento em andamento"),
+            ("🗑 Clear", self._clear_scan, "Limpa os resultados do escaneamento"),
+            ("📀 Scan USB", self._scan_usb_manual, "Escaneie dispositivos USB conectados"),
+            ("🧪 Sandbox", self._run_selected_in_sandbox, "Execute o arquivo selecionado em um ambiente isolado"),
+        ]
+        for text, handler, tip in scan_btns:
+            b = self._btn(text, handler)
+            b.setToolTip(tip)
+            btn_layout.addWidget(b)
         btn_layout.addStretch()
         layout.addWidget(btn_frame)
 
@@ -713,6 +1096,10 @@ class MainWindow(QtWidgets.QMainWindow):
         level_layout.addStretch()
         layout.addWidget(level_frame)
 
+        self.drop_zone = DropZone()
+        self.drop_zone.dropped.connect(lambda p: self._scan_file_path(p))
+        layout.addWidget(self.drop_zone)
+
         self.scan_progress = QtWidgets.QProgressBar()
         self.scan_progress.setStyleSheet(f"QProgressBar {{ background: rgba(44,44,46,0.6); border: none; border-radius: 8px; height: 8px; text-align: center; font-size: 10px; color: {TEXT}; }} QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 {ACCENT},stop:1 {ACCENT_LIGHT}); border-radius: 8px; }}")
         self.scan_progress.hide()
@@ -728,6 +1115,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.scan_tree.customContextMenuRequested.connect(lambda pos: self._scan_tree_context_menu(pos))
         layout.addWidget(self.scan_tree, 1)
+        scan_actions = QtWidgets.QHBoxLayout()
+        b = self._btn("📂 Abrir local", self._scan_open_location); b.setToolTip("Abre a pasta onde o arquivo está localizado"); scan_actions.addWidget(b)
+        b = self._btn("✅ Validar", self._scan_validate_selected, "#30d158"); b.setToolTip("Marca o arquivo como seguro (whitelist)"); scan_actions.addWidget(b)
+        b = self._btn("📦 Quarentena", self._scan_quarantine_selected); b.setToolTip("Move o arquivo para a quarentena"); scan_actions.addWidget(b)
+        b = self._btn("🗑 Excluir", self._scan_delete_selected, "#c0392b"); b.setToolTip("Exclui permanentemente o arquivo"); scan_actions.addWidget(b)
+        scan_actions.addStretch()
+        layout.addLayout(scan_actions)
         self.content_stack.addWidget(w)
 
     # ===== REAL-TIME =====
@@ -741,6 +1135,7 @@ class MainWindow(QtWidgets.QMainWindow):
         rt_l = QtWidgets.QVBoxLayout(rt_frame)
         rt_l.addWidget(QtWidgets.QLabel("File System Monitor"))
         self.rt_toggle = self._btn(_("▶ Start Real-Time Protection"), self._toggle_rt)
+        self.rt_toggle.setToolTip("Monitora o sistema de arquivos em tempo real para detectar ameaças")
         rt_l.addWidget(self.rt_toggle)
         self.rt_status = QtWidgets.QLabel(_("Status: Stopped"))
         self.rt_status.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
@@ -753,6 +1148,7 @@ class MainWindow(QtWidgets.QMainWindow):
         rw_l = QtWidgets.QVBoxLayout(rw_frame)
         rw_l.addWidget(QtWidgets.QLabel("Anti-Ransomware"))
         self.rw_toggle = self._btn(_("▶ Start Ransomware Detection"), self._toggle_rw)
+        self.rw_toggle.setToolTip("Detecta comportamentos suspeitos de ransomware (criptografia em massa)")
         rw_l.addWidget(self.rw_toggle)
         self.rw_status = QtWidgets.QLabel(_("Status: Stopped"))
         self.rw_status.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
@@ -767,10 +1163,13 @@ class MainWindow(QtWidgets.QMainWindow):
         wc_l.addWidget(QtWidgets.QLabel("Monitors /dev/video* for unauthorized access"))
         wc_btn_row = QtWidgets.QHBoxLayout()
         self.wc_toggle = self._btn(_("▶ Start Webcam Monitor"), self._toggle_webcam)
+        self.wc_toggle.setToolTip("Monitora dispositivos de webcam para acesso não autorizado")
         wc_btn_row.addWidget(self.wc_toggle)
         self.wc_block_btn = self._btn(_("🔴 Block Webcam"), self._webcam_block_device)
+        self.wc_block_btn.setToolTip("Bloqueia todos os dispositivos de webcam no sistema")
         wc_btn_row.addWidget(self.wc_block_btn)
         self.wc_unblock_btn = self._btn(_("🟢 Unblock Webcam"), self._webcam_unblock_device)
+        self.wc_unblock_btn.setToolTip("Desbloqueia dispositivos de webcam bloqueados anteriormente")
         wc_btn_row.addWidget(self.wc_unblock_btn)
         wc_l.addLayout(wc_btn_row)
         self.wc_status = QtWidgets.QLabel(_("Status: Stopped"))
@@ -791,8 +1190,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.wb_input.setPlaceholderText("domain.com")
         self.wb_input.setStyleSheet(f"background: {DARK_BG}; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 10px; padding: 8px 12px;")
         wb_input_row.addWidget(self.wb_input)
-        wb_input_row.addWidget(self._btn(_("Block"), self._web_block))
-        wb_input_row.addWidget(self._btn(_("Unblock"), self._web_unblock))
+        b = self._btn(_("Block"), self._web_block); b.setToolTip("Adiciona o domínio ao /etc/hosts para bloqueá-lo"); wb_input_row.addWidget(b)
+        b = self._btn(_("Unblock"), self._web_unblock); b.setToolTip("Remove o domínio da lista de bloqueio"); wb_input_row.addWidget(b)
         wb_l.addLayout(wb_input_row)
         self.wb_list = QtWidgets.QListWidget()
         self.wb_list.setStyleSheet(f"QListWidget {{ background: rgba(28,28,30,0.6); border: 1px solid {BORDER}; border-radius: 10px; color: {TEXT}; font-size: 12px; max-height: 120px; }}")
@@ -1052,7 +1451,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.q_table.setHorizontalHeaderLabels(["ID","Original Path","Date","Size","Actions"])
         self.q_table.setStyleSheet(f"QTableWidget {{ background: rgba(36,36,38,0.6); border: 1px solid {BORDER}; border-radius: 10px; color: {TEXT}; font-size: 12px; }} QHeaderView::section {{ background: rgba(44,44,46,0.8); color: {ACCENT_LIGHT}; border: none; padding: 6px 8px; }} QPushButton {{ background: {ACCENT}; color: white; border: none; border-radius: 8px; padding: 5px 12px; font-size: 11px; }}")
         self.q_table.horizontalHeader().setStretchLastSection(True)
-        self.q_table.setColumnWidth(0,100); self.q_table.setColumnWidth(1,250); self.q_table.setColumnWidth(2,140); self.q_table.setColumnWidth(3,60)
+        self.q_table.setColumnWidth(0,100); self.q_table.setColumnWidth(1,250); self.q_table.setColumnWidth(2,140); self.q_table.setColumnWidth(3,60); self.q_table.setColumnWidth(4,280)
         layout.addWidget(self.q_table, 1)
         self._refresh_quarantine()
         self.content_stack.addWidget(w)
@@ -1417,6 +1816,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hd_completo_btn.clicked.connect(lambda: self._hd_set_mode("completo"))
         mode_l.addWidget(self.hd_rapido_btn)
         mode_l.addWidget(self.hd_completo_btn)
+        self.hd_rapido_btn.setToolTip("Rápido: escaneia apenas locais comuns de malware")
+        self.hd_completo_btn.setToolTip("Completo: escaneia todo o sistema de arquivos (pode demorar)")
         layout.addWidget(mode_frame)
 
         ball_frame = QtWidgets.QFrame()
@@ -1449,10 +1850,12 @@ class MainWindow(QtWidgets.QMainWindow):
         """)
         self.hd_ball_btn.setText("▶")
         self.hd_ball_btn.clicked.connect(self._hd_start_scan)
+        self.hd_ball_btn.setToolTip("Clique para iniciar o escaneamento do HD")
         btn_row.addWidget(self.hd_ball_btn)
         self.hd_stop_btn = QtWidgets.QPushButton("■")
         self.hd_stop_btn.setFixedSize(90, 90)
         self.hd_stop_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.hd_stop_btn.setToolTip("Para o escaneamento em andamento")
         self.hd_stop_btn.setStyleSheet(f"""
             QPushButton {{
                 background: qradialgradient(cx:0.4, cy:0.4, radius:0.5,
@@ -1492,11 +1895,22 @@ class MainWindow(QtWidgets.QMainWindow):
         results_w = QtWidgets.QWidget()
         results_l = QtWidgets.QVBoxLayout(results_w)
         self.hd_results_tree = QtWidgets.QTreeWidget()
-        self.hd_results_tree.setHeaderLabels([_("Risk"), _("Path"), _("Reason")])
+        self.hd_results_tree.setHeaderLabels([_("Risk"), _("Path"), _("Directory"), _("Reason")])
         self.hd_results_tree.setColumnWidth(0, 90)
-        self.hd_results_tree.setColumnWidth(2, 300)
+        self.hd_results_tree.setColumnWidth(2, 200)
+        self.hd_results_tree.setColumnWidth(3, 300)
         self.hd_results_tree.setStyleSheet(f"QTreeWidget {{ background: rgba(36,36,38,0.6); border: 1px solid {BORDER}; border-radius: 10px; color: {TEXT}; font-size: 12px; }} QTreeWidget::item {{ padding: 6px 8px; border-bottom: 1px solid {DARK_MID}; }} QHeaderView::section {{ background: rgba(44,44,46,0.8); color: {ACCENT_LIGHT}; border: none; padding: 6px 8px; font-size: 12px; font-weight: 600; }}")
+        self.hd_results_tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.hd_results_tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.hd_results_tree.customContextMenuRequested.connect(self._hd_tree_context_menu)
         results_l.addWidget(self.hd_results_tree)
+        hd_actions = QtWidgets.QHBoxLayout()
+        b = self._btn("📂 Abrir local", self._hd_open_location); b.setToolTip("Abre a pasta do arquivo selecionado"); hd_actions.addWidget(b)
+        b = self._btn("✅ Validar", self._hd_validate_selected, "#30d158"); b.setToolTip("Marca o arquivo como seguro (whitelist)"); hd_actions.addWidget(b)
+        b = self._btn("📦 Quarentena", self._hd_quarantine_selected); b.setToolTip("Move o arquivo para a quarentena"); hd_actions.addWidget(b)
+        b = self._btn("🗑 Excluir", self._hd_delete_selected, "#c0392b"); b.setToolTip("Exclui permanentemente o arquivo"); hd_actions.addWidget(b)
+        hd_actions.addStretch()
+        results_l.addLayout(hd_actions)
         hd_tabs.addTab(results_w, _("Results"))
 
         recs_w = QtWidgets.QWidget()
@@ -1517,21 +1931,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _hd_set_mode(self, mode):
         self.hd_mode = mode
-        rapido_style = f"""
-            QPushButton {{
-                background: {ACCENT} if mode == "rapido" else "rgba(44,44,46,0.6)";
-                color: white if mode == "rapido" else {TEXT_DIM};
-                border: 2px solid {'transparent' if mode != "rapido" else ACCENT_LIGHT};
-            }}
-        """
-        completo_style = f"""
-            QPushButton {{
-                background: {ACCENT} if mode == "completo" else "rgba(44,44,46,0.6)";
-                color: white if mode == "completo" else {TEXT_DIM};
-                border: 2px solid {'transparent' if mode != "completo" else ACCENT_LIGHT};
-            }}
-        """
-        self.hd_rapido_btn.setStyleSheet(self.hd_rapido_btn.styleSheet())
         if mode == "rapido":
             self.hd_rapido_btn.setStyleSheet(f"""
                 QPushButton {{ background: {ACCENT}; color: white; border: 2px solid {ACCENT_LIGHT}; border-radius: 10px; font-size: 14px; font-weight: 600; padding: 0 24px; height: 42px; }}
@@ -1553,9 +1952,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _hd_stop_scan(self):
         self.engine.scanning = False
-        if hasattr(self, '_hd_proc') and self._hd_proc:
+        if hasattr(self, '_hd_worker') and hasattr(self._hd_worker, '_hd_proc') and self._hd_worker._hd_proc:
             try:
-                self._hd_proc.kill()
+                self._hd_worker._hd_proc.kill()
             except Exception:
                 pass
         self.hd_stop_btn.setEnabled(False)
@@ -1591,6 +1990,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hd_worker = ScanWorker(self.engine, paths, mode=self.hd_mode)
         self._hd_worker.finished.connect(self._hd_scan_done)
         self._hd_worker.progress.connect(self._hd_update_progress)
+        self._hd_worker.result_found.connect(self._hd_add_result_item)
         self._hd_worker.start()
 
     def _hd_update_progress(self, pct, msg):
@@ -1603,6 +2003,25 @@ class MainWindow(QtWidgets.QMainWindow):
             self.hd_progress.setFormat("")
         self.hd_status.setText(msg)
 
+    def _hd_add_result_item(self, r):
+        risk = r.get("risk", "unknown")
+        if risk == "pentest":
+            return
+        d = os.path.dirname(r["path"])
+        if risk == "malicious":
+            item = QtWidgets.QTreeWidgetItem([_("MALICIOUS"), r["path"], d, r.get("reason", "")])
+            for i in range(4): item.setForeground(i, QtGui.QColor(RED))
+        elif risk == "suspicious":
+            item = QtWidgets.QTreeWidgetItem([_("SUSPICIOUS"), r["path"], d, r.get("reason", "")])
+            for i in range(4): item.setForeground(i, QtGui.QColor(YELLOW))
+        elif risk == "pentest":
+            item = QtWidgets.QTreeWidgetItem([_("ALLOWED"), r["path"], d, r.get("reason", "")])
+            for i in range(4): item.setForeground(i, QtGui.QColor(CYAN))
+        else:
+            return
+        item.setToolTip(1, r["path"])
+        self.hd_results_tree.addTopLevelItem(item)
+
     def _hd_scan_done(self, results):
         self.hd_progress.hide()
         self.hd_stop_btn.hide()
@@ -1614,24 +2033,14 @@ class MainWindow(QtWidgets.QMainWindow):
         total = malicious + suspicious + safe + len(results["pentest"])
         mode_label = _("Quick scan") if self.hd_mode == "rapido" else _("Full scan")
         self.hd_ball_label.setText(_("%s complete: %d files") % (mode_label, total))
-        for r in results["malicious"]:
-            item = QtWidgets.QTreeWidgetItem([_("MALICIOUS"), r["path"], r["reason"]])
-            for i in range(3): item.setForeground(i, QtGui.QColor(RED))
-            self.hd_results_tree.addTopLevelItem(item)
-        for r in results["suspicious"]:
-            item = QtWidgets.QTreeWidgetItem([_("SUSPICIOUS"), r["path"], r["reason"]])
-            for i in range(3): item.setForeground(i, QtGui.QColor(YELLOW))
-            self.hd_results_tree.addTopLevelItem(item)
-        for r in results["pentest"]:
-            item = QtWidgets.QTreeWidgetItem([_("ALLOWED"), r["path"], r["reason"]])
-            for i in range(3): item.setForeground(i, QtGui.QColor(CYAN))
-            self.hd_results_tree.addTopLevelItem(item)
         if not any([results["malicious"], results["suspicious"], results["pentest"]]):
-            item = QtWidgets.QTreeWidgetItem([_("SAFE"), _("No threats found"), _("All files are clean")])
-            for i in range(3): item.setForeground(i, QtGui.QColor(GREEN))
+            item = QtWidgets.QTreeWidgetItem([_("SAFE"), _("No threats found"), "", _("All files are clean")])
+            for i in range(4): item.setForeground(i, QtGui.QColor(GREEN))
             self.hd_results_tree.addTopLevelItem(item)
         if safe > 0:
             self.hd_recs_list.addItem(_("✅ %d clean files - no action needed") % safe)
+        if malicious:
+            self._show_msg(f"HD Scan: {malicious} malware encontrado!", sound=True)
         if malicious > 0:
             self.hd_recs_list.addItem(_("🔴 %d malicious files found - quarantine them immediately") % malicious)
         if suspicious > 0:
@@ -1668,6 +2077,133 @@ class MainWindow(QtWidgets.QMainWindow):
             })
         self._refresh_drives()
 
+    def _hd_tree_context_menu(self, pos):
+        item = self.hd_results_tree.itemAt(pos)
+        if not item or item.text(0) in ("SAFE",):
+            return
+        path = item.toolTip(1)
+        menu = QtWidgets.QMenu()
+        if path and os.path.isfile(path):
+            menu.addAction("📂 Abrir local do arquivo").triggered.connect(
+                lambda: os.system(f'xdg-open "{os.path.dirname(path)}"'))
+            menu.addSeparator()
+            menu.addAction("✅ Validar (ignorar sempre)").triggered.connect(
+                lambda: self._hd_validate_path(path))
+            menu.addAction("📦 Mover para Quarentena").triggered.connect(
+                lambda: self._hd_quarantine_path(path))
+            menu.addAction("🗑 Excluir permanentemente").triggered.connect(
+                lambda: self._hd_delete_path(path))
+        menu.addSeparator()
+        menu.addAction("📦 Quarentena dos selecionados").triggered.connect(
+            self._hd_quarantine_selected)
+        menu.exec_(self.hd_results_tree.viewport().mapToGlobal(pos))
+
+    def _hd_open_location(self):
+        item = self.hd_results_tree.currentItem()
+        if not item or item.text(0) in ("SAFE",):
+            self._show_msg("Selecione um arquivo na lista")
+            return
+        path = item.toolTip(1)
+        if not path or not os.path.isfile(path):
+            self._show_msg("Arquivo nao encontrado")
+            return
+        os.system(f'xdg-open "{os.path.dirname(path)}"')
+
+    def _hd_validate_selected(self):
+        for item in self.hd_results_tree.selectedItems():
+            if item.text(0) in ("SAFE",):
+                continue
+            path = item.toolTip(1)
+            if path and os.path.isfile(path):
+                self._hd_validate_path(path)
+
+    def _hd_validate_path(self, path):
+        self.engine.whitelist.add(path.lower())
+        self.engine.save_config()
+        self._show_msg(f"✅ Validado: {os.path.basename(path)}")
+
+    def _hd_quarantine_selected(self):
+        items = self.hd_results_tree.selectedItems()
+        if not items:
+            return
+        paths = []
+        for item in items:
+            if item.text(0) in ("SAFE",):
+                continue
+            p = item.toolTip(1)
+            if p and os.path.isfile(p):
+                paths.append(p)
+        if not paths:
+            return
+        if len(paths) > 1:
+            reply = QtWidgets.QMessageBox.question(self, "Confirmar",
+                f"Mover {len(paths)} arquivo(s) para quarentena?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
+        for p in paths:
+            ok, msg = self.quarantine.quarantine(p)
+            if ok:
+                self._remove_hd_tree_item(p)
+        if len(paths) == 1:
+            self._show_msg(f"📦 Quarentenado: {os.path.basename(paths[0])}")
+
+    def _hd_delete_selected(self):
+        items = self.hd_results_tree.selectedItems()
+        if not items:
+            return
+        paths = []
+        for item in items:
+            if item.text(0) in ("SAFE",):
+                continue
+            p = item.toolTip(1)
+            if p and os.path.isfile(p):
+                paths.append(p)
+        if not paths:
+            return
+        label = f"Excluir permanentemente '{os.path.basename(paths[0])}'?" if len(paths) == 1 else f"Excluir permanentemente {len(paths)} arquivo(s)?"
+        reply = QtWidgets.QMessageBox.question(self, "Confirmar", label,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        deleted = 0
+        for p in paths:
+            try:
+                os.remove(p)
+                self._remove_hd_tree_item(p)
+                deleted += 1
+            except Exception as e:
+                self._show_msg(f"Erro ao excluir {os.path.basename(p)}: {e}")
+        if len(paths) == 1 and deleted > 0:
+            self._show_msg(f"🗑 Excluído: {os.path.basename(paths[0])}")
+
+    def _hd_quarantine_path(self, path):
+        ok, msg = self.quarantine.quarantine(path)
+        if ok:
+            self._show_msg(f"📦 Quarentenado: {os.path.basename(path)}")
+            self._remove_hd_tree_item(path)
+        else:
+            self._show_msg(f"Erro: {msg}")
+
+    def _hd_delete_path(self, path):
+        reply = QtWidgets.QMessageBox.question(self, "Confirmar",
+            f"Excluir permanentemente '{os.path.basename(path)}'?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if reply == QtWidgets.QMessageBox.Yes:
+            try:
+                os.remove(path)
+                self._show_msg(f"🗑 Excluído: {os.path.basename(path)}")
+                self._remove_hd_tree_item(path)
+            except Exception as e:
+                self._show_msg(f"Erro ao excluir: {e}")
+
+    def _remove_hd_tree_item(self, path):
+        for i in range(self.hd_results_tree.topLevelItemCount()):
+            item = self.hd_results_tree.topLevelItem(i)
+            if item.toolTip(1) == path:
+                self.hd_results_tree.takeTopLevelItem(i)
+                break
+
     def _refresh_drives(self):
         self.hd_drives_list.clear()
         try:
@@ -1694,13 +2230,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # General
         gen_w = QtWidgets.QWidget()
-        gen_l = QtWidgets.QVBoxLayout(gen_w)
+        gen_scroll = QtWidgets.QScrollArea()
+        gen_scroll.setWidgetResizable(True)
+        gen_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; } QScrollBar:vertical { width: 8px; background: transparent; } QScrollBar::handle:vertical { background: rgba(255,255,255,0.1); border-radius: 4px; min-height: 30px; } QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+        gen_l = QtWidgets.QVBoxLayout()
+        gen_l.setContentsMargins(0, 0, 0, 0)
 
         prot_frame = QtWidgets.QFrame()
         prot_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
         prot_l = QtWidgets.QVBoxLayout(prot_frame)
         prot_l.addWidget(QtWidgets.QLabel("Protection"))
         self.protect_cb = QtWidgets.QCheckBox("Enable real-time protection")
+        self.protect_cb.setToolTip("Ativa ou desativa o monitoramento do sistema de arquivos em tempo real")
         self.protect_cb.setChecked(True)
         self.protect_cb.setStyleSheet(f"QCheckBox {{ color: {TEXT}; font-size: 12px; }} QCheckBox::indicator {{ width: 16px; height: 16px; }}")
         self.protect_cb.toggled.connect(self._toggle_protection)
@@ -1733,10 +2274,29 @@ class MainWindow(QtWidgets.QMainWindow):
         gm_l = QtWidgets.QVBoxLayout(gm_frame)
         gm_l.addWidget(QtWidgets.QLabel("Game Mode"))
         self.gm_cb = QtWidgets.QCheckBox("Auto-detect fullscreen games and suppress notifications")
+        self.gm_cb.setToolTip("Suprime notificacoes do DefendR automaticamente quando um jogo em tela cheia eh detectado")
         self.gm_cb.setStyleSheet(f"QCheckBox {{ color: {TEXT}; font-size: 12px; }}")
         self.gm_cb.toggled.connect(lambda v: self.game_mode.start() if v else self.game_mode.stop())
         gm_l.addWidget(self.gm_cb)
         gen_l.addWidget(gm_frame)
+
+        # Auto-start
+        as_frame = QtWidgets.QFrame()
+        as_frame.setStyleSheet(f"background: rgba(36,36,38,0.8); border: 1px solid {BORDER}; border-radius: 14px;")
+        as_l = QtWidgets.QVBoxLayout(as_frame)
+        as_l.addWidget(QtWidgets.QLabel("Inicializacao"))
+        self.autostart_cb = QtWidgets.QCheckBox("Iniciar DefendR ao ligar o computador")
+        self.autostart_cb.setToolTip("Faz o DefendR iniciar automaticamente quando voce faz login")
+        self.autostart_cb.setStyleSheet(f"QCheckBox {{ color: {TEXT}; font-size: 12px; }} QCheckBox::indicator {{ width: 16px; height: 16px; }}")
+        self.autostart_cb.toggled.connect(self._toggle_autostart)
+        as_l.addWidget(self.autostart_cb)
+        # Restore autostart state
+        saved = self.engine.config_data.get("autostart", False)
+        self.autostart_cb.setChecked(saved)
+        # If enterprise mode is active, lock the checkbox
+        if self.engine.config_data.get("enterprise_mode"):
+            self.autostart_cb.setEnabled(False)
+        gen_l.addWidget(as_frame)
 
         # Enterprise Mode
         em_frame = QtWidgets.QFrame()
@@ -1750,8 +2310,11 @@ class MainWindow(QtWidgets.QMainWindow):
         em_l.addWidget(em_desc)
         em_btn_row = QtWidgets.QHBoxLayout()
         self.enterprise_cb = QtWidgets.QCheckBox("Ativar Modo Empresarial")
+        self.enterprise_cb.setToolTip("Modo maximo de seguranca: bloqueia dispositivos, endurece o sistema e exige senha para desativar")
         self.enterprise_cb.setStyleSheet(f"QCheckBox {{ color: {RED}; font-size: 13px; font-weight: 600; }} QCheckBox::indicator {{ width: 18px; height: 18px; }}")
         self.enterprise_cb.toggled.connect(self._toggle_enterprise_mode)
+        if self.engine.config_data.get("enterprise_mode"):
+            self.enterprise_cb.setChecked(True)
         em_btn_row.addWidget(self.enterprise_cb)
         em_btn_row.addStretch()
         em_l.addLayout(em_btn_row)
@@ -1764,8 +2327,9 @@ class MainWindow(QtWidgets.QMainWindow):
         su_l.addWidget(QtWidgets.QLabel("Software Updater"))
         su_l.addWidget(QtWidgets.QLabel("Check for outdated system packages and pip packages"))
         su_btn_row = QtWidgets.QHBoxLayout()
-        su_btn_row.addWidget(self._btn(_("🔍 Check for Updates"), self._check_soft_updates))
+        b = self._btn(_("🔍 Check for Updates"), self._check_soft_updates); b.setToolTip("Verifica se ha pacotes do sistema e pip desatualizados"); su_btn_row.addWidget(b)
         self.su_install_btn = self._btn(_("📥 Install All Updates"), self._su_install_all)
+        self.su_install_btn.setToolTip("Instala todas as atualizacoes de sistema e pip disponiveis")
         su_btn_row.addWidget(self.su_install_btn)
         su_l.addLayout(su_btn_row)
         self.su_status = QtWidgets.QLabel("")
@@ -1784,7 +2348,7 @@ class MainWindow(QtWidgets.QMainWindow):
         upd_l.addWidget(QtWidgets.QLabel("🛡  DefendR Atualizacao"))
         upd_l.addWidget(QtWidgets.QLabel("Baixa a versao mais recente do GitHub e reinicia automaticamente"))
         upd_row = QtWidgets.QHBoxLayout()
-        upd_row.addWidget(self._btn("⬇️  Atualizar DefendR", self._update_defendr, ACCENT_LIGHT))
+        b = self._btn("⬇️  Atualizar DefendR", self._update_defendr, ACCENT_LIGHT); b.setToolTip("Baixa a versao mais recente do GitHub e reinicia automaticamente"); upd_row.addWidget(b)
         self.upd_status = QtWidgets.QLabel("")
         self.upd_status.setStyleSheet(f"font-size: 12px; color: {TEXT_DIM}; background: transparent;")
         upd_row.addWidget(self.upd_status)
@@ -1798,9 +2362,25 @@ class MainWindow(QtWidgets.QMainWindow):
         restart_l = QtWidgets.QVBoxLayout(restart_frame)
         restart_l.addWidget(QtWidgets.QLabel("Reiniciar DefendR"))
         restart_l.addWidget(QtWidgets.QLabel("Reinicia o aplicativo para aplicar atualizacoes e correcoes"))
-        restart_l.addWidget(self._btn("🔄 Reiniciar Agora", self._restart_app, RED))
+        btn_restart = self._btn("🔄 Reiniciar Agora", self._restart_app, RED)
+        btn_restart.setToolTip("Reinicia o DefendR para aplicar atualizacoes e correcoes")
+        restart_l.addWidget(btn_restart)
         gen_l.addWidget(restart_frame)
-        tabs.addTab(gen_w, "General")
+
+        # Uninstall button
+        uninst_frame = QtWidgets.QFrame()
+        uninst_frame.setStyleSheet(f"background: rgba(255,69,58,0.04); border: 1px solid {RED}; border-radius: 14px;")
+        uninst_l = QtWidgets.QVBoxLayout(uninst_frame)
+        uninst_l.addWidget(QtWidgets.QLabel("Desinstalar DefendR"))
+        uninst_l.addWidget(QtWidgets.QLabel("Remove todos os arquivos, configuracoes e atalhos do sistema"))
+        btn_uninst = self._btn("🗑  Desinstalar", self._uninstall_defendr, RED)
+        btn_uninst.setToolTip("Remove permanentemente o DefendR e todos os seus dados")
+        uninst_l.addWidget(btn_uninst)
+        gen_l.addWidget(uninst_frame)
+        gen_l.addStretch()
+        gen_w.setLayout(gen_l)
+        gen_scroll.setWidget(gen_w)
+        tabs.addTab(gen_scroll, "General")
 
         # Whitelist
         wl_w = QtWidgets.QWidget()
@@ -1818,6 +2398,20 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(tabs, 1)
         self.content_stack.addWidget(w)
 
+    # ===================== CLOUD SERVER =====================
+    def _auto_start_cloud_server(self):
+        try:
+            from defendr.reputation import ReputationServer, REPUTATION_PORT, DEFAULT_SERVER_IP, ReputationClient
+            self._rep_server = ReputationServer()
+            self._rep_server.start()
+            if self._rep_server.actual_port:
+                self.engine.rep_client = ReputationClient(server_url=f"http://{DEFAULT_SERVER_IP}:{self._rep_server.actual_port}")
+            if hasattr(self, 'cloud_server_status'):
+                self.cloud_server_status.setText(f"Servidor: Rodando na porta {self._rep_server.actual_port or REPUTATION_PORT}")
+        except Exception as e:
+            if hasattr(self, 'cloud_server_status'):
+                self.cloud_server_status.setText(f"Servidor: Erro ao iniciar - {str(e)[:50]}")
+
     # ===================== MONITORS =====================
     def _start_monitors(self):
         self.monitor_timer = QtCore.QTimer()
@@ -1829,19 +2423,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fw_detect_timer = QtCore.QTimer()
         self.fw_detect_timer.timeout.connect(self._fw_detect_loop)
         self.fw_detect_timer.start(3000)
+        self._notify_queue = []
+        self._notify_timer = QtCore.QTimer()
+        self._notify_timer.timeout.connect(self._process_notify)
+        self._notify_timer.setInterval(2500)
         self.netmon.start()
-        self.selfprotect.start()
-        self.adv_protection.start()
         self._update_dns()
         self._refresh_procs()
-        # Auto-start background protections
         self.rt_protector.start()
         self.rt_toggle.setText("⏹ Stop Real-Time Protection")
         self.rt_status.setText(_("Status: Active"))
-        self.ransomware.start()
-        self.rw_toggle.setText("⏹ Stop Ransomware Detection")
-        self.rw_status.setText(_("Status: Active"))
         self.usb_scanner.start()
+        if self.protection_level in ("medium", "hard"):
+            self.ransomware.start()
+            self.rw_toggle.setText("⏹ Stop Ransomware Detection")
+            self.rw_status.setText(_("Status: Active"))
+            self.webcam_protector.start()
+        if self.protection_level == "hard":
+            self.selfprotect.start()
+            self.adv_protection.start()
+        self._update_protect_label()
+
+        # Restore autostart from config
+        if self.engine.config_data.get("autostart"):
+            self._setup_autostart()
+            self.autostart_enabled = True
+        if self.engine.config_data.get("enterprise_mode"):
+            self._setup_autostart()
+            self.autostart_enabled = True
 
     def _update_stats(self):
         try:
@@ -1860,6 +2469,23 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception: pass
             threats = self.stat_cards["threats"].value_lbl.text()
             self.tray.setToolTip(f"DefendR - Proteção Ativa\nCPU: {cpu:.0f}% | RAM: {mem:.0f}%\nAmeaças: {threats}")
+            if hasattr(self.engine, "rep_client"):
+                import json
+                from urllib.request import Request, urlopen
+                req = Request(f"http://127.0.0.1:48124/stats")
+                with urlopen(req, timeout=3) as resp:
+                    sdata = json.loads(resp.read())
+                self.stat_cards["users"].set_value(str(sdata.get("active_clients", 0)))
+            ia = self.engine.joguin.get_stats()
+            self.ia_level_lbl.setText(f"Level {ia['level']}")
+            self.ia_xp_bar.setMaximum(100)
+            self.ia_xp_bar.setValue(int(ia['pct_to_next']))
+            self.ia_xp_lbl.setText(f"{ia['xp']}/{ia['xp'] + ia['xp_for_next']} XP")
+            self.ia_acc_lbl.setText(f"🎯 {ia['accuracy']}% accuracy")
+            self.ia_hash_lbl.setText(f"📚 {ia['known_hashes']} hashes")
+            self.ia_pat_lbl.setText(f"🧩 {ia['patterns']} patterns")
+            if ia['total'] > 0:
+                self.ia_status_lbl.setText(f"🤖 Aprendi com {ia['total']} arquivos — {ia['correct']} acertos")
         except Exception: pass
 
     def _update_dns(self):
@@ -1871,31 +2497,107 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception: pass
 
     # ===================== SCANNER =====================
+    def _scan_file_path(self, path):
+        if os.path.isfile(path):
+            self._do_scan(path)
+
     def _scan_file(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select file to scan")
+        import pwd
+        uid = int(os.environ.get("PKEXEC_UID") or os.environ.get("SUDO_UID") or "1000")
+        home = pwd.getpwuid(uid).pw_dir
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select file to scan", home)
         if path: self._do_scan(path)
     def _scan_dir(self):
-        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select folder to scan")
+        import pwd
+        uid = int(os.environ.get("PKEXEC_UID") or os.environ.get("SUDO_UID") or "1000")
+        home = pwd.getpwuid(uid).pw_dir
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select folder to scan", home)
         if path: self._do_scan(path)
     def _scan_usb_manual(self):
-        for d in ["/media","/run/media","/mnt"]:
-            if os.path.isdir(d):
-                for f in os.listdir(d):
-                    fp = os.path.join(d,f)
-                    if os.path.ismount(fp):
-                        self._do_scan(fp)
-                        return
+        for base in ["/media", "/run/media", "/mnt"]:
+            if not os.path.isdir(base):
+                continue
+            for root, dirs, _ in os.walk(base, topdown=True):
+                if root == base:
+                    continue
+                if os.path.ismount(root):
+                    self._do_scan(root)
+                    return
         self.scan_status.setText("No USB mounts found")
+
+    def _scan_desktop(self):
+        import pwd
+        try:
+            uid = int(os.environ.get("PKEXEC_UID") or os.environ.get("SUDO_UID") or os.getuid())
+            home = pwd.getpwuid(uid).pw_dir
+            for nome in ["Desktop", "Área de trabalho", "桌面", "Escritorio"]:
+                d = os.path.join(home, nome)
+                if os.path.isdir(d):
+                    self.scan_status.setText(f"Escaneando: {d}")
+                    self._scan_desktop_path(d)
+                    return
+            self.scan_status.setText("Desktop not found")
+        except Exception as e:
+            self.scan_status.setText(f"Erro: {str(e)[:50]}")
+
+    def _scan_desktop_path(self, path):
+        self.scan_tree.clear()
+        self.scan_progress.setValue(0)
+        self.scan_progress.show()
+        mode = getattr(self, '_scan_worker_mode', 'rapido')
+        self.scan_status.setText(f"Scanning ({mode}): {path}")
+
+        def scan_task():
+            try:
+                results = self.engine.scan_rapido(path)
+                self.desktop_scan_done.emit(results)
+            except Exception as e:
+                self.desktop_scan_error.emit(str(e))
+
+        threading.Thread(target=scan_task, daemon=True).start()
+
+    def _on_desktop_scan_done(self, results):
+        self.scan_progress.hide()
+        for r in results.get("malicious", []):
+            self._add_scan_item("MALICIOUS", r["path"], r.get("reason", ""), RED)
+        for r in results.get("suspicious", []):
+            self._add_scan_item("SUSPICIOUS", r["path"], r.get("reason", ""), YELLOW)
+        for r in results.get("pentest", []):
+            self._add_scan_item("PENTEST", r["path"], r.get("reason", ""), CYAN)
+        malicious = len(results["malicious"])
+        suspicious = len(results["suspicious"])
+        safe = results["safe"]
+        self.scan_status.setText(f"Done. Malicious: {malicious}, Suspicious: {suspicious}, Pentest: {len(results['pentest'])}, Safe: {safe}")
+        total = safe + malicious + suspicious + len(results["pentest"])
+        cur = int(self.stat_cards["scanned"].value_lbl.text() or "0")
+        self.stat_cards["scanned"].set_value(str(cur+total))
+        if not any([results["malicious"], results["suspicious"], results["pentest"]]):
+            self._add_scan_item("SAFE", _("No threats found"), "All files are clean", GREEN)
+
+    def _on_desktop_scan_error(self, msg):
+        self.scan_progress.hide()
+        self.scan_status.setText(f"Erro: {msg[:80]}")
 
     def _do_scan(self, path):
         self.scan_tree.clear()
         self.scan_progress.setValue(0)
         self.scan_progress.show()
-        self.scan_status.setText(f"Scanning: {path}")
-        thread = ScanWorker(self.engine, path)
+        mode = getattr(self, '_scan_worker_mode', 'rapido')
+        self.scan_status.setText(f"Scanning ({mode}): {path}")
+        thread = ScanWorker(self.engine, path, mode=mode)
         thread.finished.connect(lambda results: self._scan_done(results))
+        thread.result_found.connect(self._scan_add_result_item)
         thread.start()
         self._scan_thread = thread
+
+    def _scan_add_result_item(self, r):
+        risk = r.get("risk", "unknown")
+        if risk == "malicious":
+            self._add_scan_item("MALICIOUS", r["path"], r.get("reason", ""), RED)
+        elif risk == "suspicious":
+            self._add_scan_item("SUSPICIOUS", r["path"], r.get("reason", ""), YELLOW)
+        elif risk == "pentest":
+            self._add_scan_item("PENTEST", r["path"], r.get("reason", ""), CYAN)
 
     def _scan_done(self, results):
         self.scan_progress.hide()
@@ -1903,14 +2605,10 @@ class MainWindow(QtWidgets.QMainWindow):
         total = results["safe"] + len(results["malicious"])+len(results["suspicious"])+len(results["pentest"])
         cur = int(self.stat_cards["scanned"].value_lbl.text() or "0")
         self.stat_cards["scanned"].set_value(str(cur+total))
-        for r in results["malicious"]:
-            self._add_scan_item("MALICIOUS", r["path"], r["reason"], RED)
-        for r in results["suspicious"]:
-            self._add_scan_item("SUSPICIOUS", r["path"], r["reason"], YELLOW)
-        for r in results["pentest"]:
-            self._add_scan_item("PENTEST", r["path"], r["reason"], CYAN)
         if not any([results["malicious"],results["suspicious"],results["pentest"]]):
             self._add_scan_item("SAFE", _("No threats found"), "All files are clean", GREEN)
+        if results["malicious"]:
+            self._show_msg(f"Scan completo: {len(results['malicious'])} malware encontrado!", sound=True)
 
     def _add_scan_item(self, risk, path, reason, color):
         item = QtWidgets.QTreeWidgetItem([risk, textwrap.shorten(path, 80), reason])
@@ -1921,6 +2619,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_scan_level_change(self, idx):
         levels = ["light", "medium", "heavy"]
         self.engine.scan_level = levels[idx]
+        self._scan_worker_mode = levels[idx]
 
     def _stop_scan(self):
         self.engine.scanning = False
@@ -1938,8 +2637,18 @@ class MainWindow(QtWidgets.QMainWindow):
         if not path or not os.path.isfile(path):
             return
         menu = QtWidgets.QMenu()
-        act = menu.addAction("🧪 Executar em Sandbox")
-        act.triggered.connect(lambda: self._run_sandbox_file(path))
+        menu.addAction("📂 Abrir local do arquivo").triggered.connect(
+            lambda: os.system(f'xdg-open "{os.path.dirname(path)}"'))
+        menu.addSeparator()
+        menu.addAction("✅ Validar (ignorar sempre)").triggered.connect(
+            lambda: self._scan_validate_path(path))
+        menu.addAction("📦 Mover para Quarentena").triggered.connect(
+            lambda: self._scan_quarantine_path(path))
+        menu.addAction("🗑 Excluir permanentemente").triggered.connect(
+            lambda: self._scan_delete_path(path))
+        menu.addSeparator()
+        menu.addAction("🧪 Executar em Sandbox").triggered.connect(
+            lambda: self._run_sandbox_file(path))
         menu.exec_(self.scan_tree.viewport().mapToGlobal(pos))
 
     def _run_sandbox_file(self, path):
@@ -1947,6 +2656,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._show_msg(msg)
         if ok and self.adv_protection.sandbox_available():
             self._show_intrusion_popup("LOW", f"Sandbox: {msg}", "Protecao Avancada", "127.0.0.1")
+
+    def _scan_open_location(self):
+        item = self.scan_tree.currentItem()
+        if not item:
+            self._show_msg("Selecione um arquivo na lista")
+            return
+        path = item.toolTip(1)
+        if not path or not os.path.isfile(path):
+            self._show_msg("Arquivo nao encontrado")
+            return
+        os.system(f'xdg-open "{os.path.dirname(path)}"')
+
+    def _scan_validate_selected(self):
+        items = self.scan_tree.selectedItems()
+        if not items:
+            self._show_msg("Selecione um arquivo na lista")
+            return
+        for item in items:
+            path = item.toolTip(1)
+            if path and os.path.isfile(path):
+                self._scan_validate_path(path)
+
+    def _scan_validate_path(self, path):
+        self.engine.whitelist.add(path.lower())
+        self.engine.save_config()
+        self._show_msg(f"✅ Validado: {os.path.basename(path)}")
 
     def _run_selected_in_sandbox(self):
         item = self.scan_tree.currentItem()
@@ -1958,6 +2693,84 @@ class MainWindow(QtWidgets.QMainWindow):
             self._show_msg("Arquivo nao encontrado")
             return
         self._run_sandbox_file(path)
+
+    def _scan_quarantine_selected(self):
+        items = self.scan_tree.selectedItems()
+        if not items:
+            return
+        paths = []
+        for item in items:
+            p = item.toolTip(1)
+            if p and os.path.isfile(p):
+                paths.append(p)
+        if not paths:
+            return
+        if len(paths) > 1:
+            reply = QtWidgets.QMessageBox.question(self, "Confirmar",
+                f"Mover {len(paths)} arquivo(s) para quarentena?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
+        for p in paths:
+            ok, msg = self.quarantine.quarantine(p)
+            if ok:
+                self._remove_scan_tree_item(p)
+        if len(paths) == 1:
+            self._show_msg(f"📦 Quarentenado: {os.path.basename(paths[0])}")
+
+    def _scan_quarantine_path(self, path):
+        ok, msg = self.quarantine.quarantine(path)
+        if ok:
+            self._show_msg(f"📦 Quarentenado: {os.path.basename(path)}")
+            self._remove_scan_tree_item(path)
+        else:
+            self._show_msg(f"Erro: {msg}")
+
+    def _scan_delete_selected(self):
+        items = self.scan_tree.selectedItems()
+        if not items:
+            return
+        paths = []
+        for item in items:
+            p = item.toolTip(1)
+            if p and os.path.isfile(p):
+                paths.append(p)
+        if not paths:
+            return
+        label = f"Excluir permanentemente '{os.path.basename(paths[0])}'?" if len(paths) == 1 else f"Excluir permanentemente {len(paths)} arquivo(s)?"
+        reply = QtWidgets.QMessageBox.question(self, "Confirmar", label,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        deleted = 0
+        for p in paths:
+            try:
+                os.remove(p)
+                self._remove_scan_tree_item(p)
+                deleted += 1
+            except Exception as e:
+                self._show_msg(f"Erro ao excluir {os.path.basename(p)}: {e}")
+        if len(paths) == 1 and deleted > 0:
+            self._show_msg(f"🗑 Excluído: {os.path.basename(paths[0])}")
+
+    def _scan_delete_path(self, path):
+        reply = QtWidgets.QMessageBox.question(self, "Confirmar",
+            f"Excluir permanentemente '{os.path.basename(path)}'?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if reply == QtWidgets.QMessageBox.Yes:
+            try:
+                os.remove(path)
+                self._show_msg(f"🗑 Excluído: {os.path.basename(path)}")
+                self._remove_scan_tree_item(path)
+            except Exception as e:
+                self._show_msg(f"Erro ao excluir: {e}")
+
+    def _remove_scan_tree_item(self, path):
+        for i in range(self.scan_tree.topLevelItemCount()):
+            item = self.scan_tree.topLevelItem(i)
+            if item.toolTip(1) == path:
+                self.scan_tree.takeTopLevelItem(i)
+                break
 
     # ===================== NETWORK =====================
     def _toggle_net(self):
@@ -1971,6 +2784,31 @@ class MainWindow(QtWidgets.QMainWindow):
             self.net_status.setText("●  Monitoring: ON")
             self.net_status.setStyleSheet(f"font-size: 13px; color: {GREEN}; background: transparent;")
             self.net_toggle.setText("⏹ Stop")
+
+    def _alert_context_menu(self, pos):
+        item = self.alert_list.itemAt(pos)
+        if not item:
+            return
+        path = item.data(QtCore.Qt.UserRole) or ""
+        menu = QtWidgets.QMenu()
+        menu.addAction("📋 Copiar texto").triggered.connect(
+            lambda: QtWidgets.QApplication.clipboard().setText(item.text()))
+        if path and os.path.isfile(path):
+            menu.addSeparator()
+            menu.addAction("📂 Abrir local do arquivo").triggered.connect(
+                lambda: os.system(f'xdg-open "{os.path.dirname(path)}"'))
+            menu.addSeparator()
+            menu.addAction("📦 Quarentena").triggered.connect(
+                lambda: self._scan_quarantine_path(path))
+            menu.addAction("🗑 Excluir").triggered.connect(
+                lambda: self._scan_delete_path(path))
+            menu.addSeparator()
+            menu.addAction("✅ Validar (ignorar sempre)").triggered.connect(
+                lambda: self._scan_validate_path(path))
+        menu.exec_(self.alert_list.viewport().mapToGlobal(pos))
+
+    def _clear_alerts(self):
+        self.alert_list.clear()
 
     def _on_net_alert(self, level, msg):
         item = QtWidgets.QListWidgetItem(f"[{level}] {msg}")
@@ -1992,6 +2830,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.alert_list.insertItem(0, QtWidgets.QListWidgetItem(f"[{attack_type}] {message}"))
         if self.alert_list.count() > 100:
             self.alert_list.takeItem(self.alert_list.count()-1)
+        self._show_msg(f"[{attack_type}] {message}", sound=True)
 
     def _on_net_data(self, data):
         if data.get("type") == "arp":
@@ -2013,12 +2852,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.rt_status.setText(_("Status: Active"))
 
     def _on_rt_alert(self, risk, path, reason):
+        self._show_msg(f"[RT] {reason}", sound=True)
         item = QtWidgets.QListWidgetItem(f"[{risk.upper()}] {path}: {reason}")
+        item.setData(QtCore.Qt.UserRole, path)
         color = RED if risk == "malicious" else YELLOW
         item.setForeground(QtGui.QColor(color))
         self.rt_alerts.insertItem(0, item)
         if self.rt_alerts.count() > 100: self.rt_alerts.takeItem(self.rt_alerts.count()-1)
         ditem = QtWidgets.QListWidgetItem(f"[RT][{risk.upper()}] {reason}")
+        ditem.setData(QtCore.Qt.UserRole, path)
         ditem.setForeground(QtGui.QColor(color))
         self.alert_list.insertItem(0, ditem)
         if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
@@ -2038,12 +2880,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.rw_status.setText(_("Status: Active"))
 
     def _on_ransomware_alert(self, level, msg):
+        self._show_msg(f"[RANSOM] {msg}", sound=True)
         item = QtWidgets.QListWidgetItem(f"[{level}] {msg}")
         color = RED if level == "HIGH" else YELLOW
         item.setForeground(QtGui.QColor(color))
         self.rt_alerts.insertItem(0, item)
         self.alert_list.insertItem(0, QtWidgets.QListWidgetItem(f"[RANSOM]{msg}"))
-        if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
         if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
 
     # ===================== WEB BLOCKER =====================
@@ -2142,6 +2984,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.q_table.setItem(i,3,QtWidgets.QTableWidgetItem(f"{info.get('size',0)}B"))
             btn_w = QtWidgets.QWidget()
             btn_l = QtWidgets.QHBoxLayout(btn_w); btn_l.setContentsMargins(2,2,2,2)
+            vt_btn = QtWidgets.QPushButton("🔍 VT")
+            vt_btn.setStyleSheet(f"QPushButton {{ background: {ACCENT}; color: white; border: none; border-radius: 8px; padding: 5px 10px; font-size: 11px; }}")
+            vt_btn.setToolTip("Check on VirusTotal")
+            vt_btn.clicked.connect(lambda _, q=qid: self._quarantine_vt(q))
+            btn_l.addWidget(vt_btn)
             r_btn = QtWidgets.QPushButton("Restore")
             r_btn.setStyleSheet(f"QPushButton {{ background: {GREEN}; color: white; border: none; border-radius: 8px; padding: 5px 14px; font-size: 11px; }}")
             r_btn.clicked.connect(lambda _, q=qid: self._quarantine_restore(q))
@@ -2151,6 +2998,38 @@ class MainWindow(QtWidgets.QMainWindow):
             d_btn.clicked.connect(lambda _, q=qid: self._quarantine_delete(q))
             btn_l.addWidget(d_btn)
             self.q_table.setCellWidget(i,4,btn_w)
+
+    def _quarantine_vt(self, qid):
+        info = self.quarantine.metadata.get(qid)
+        if not info or not os.path.isfile(info.get("quarantined", "")):
+            self._show_msg("Arquivo nao encontrado na quarentena")
+            return
+        import hashlib, urllib.request, json as j
+        try:
+            with open(info["quarantined"], "rb") as f:
+                h = hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            self._show_msg("Erro ao ler arquivo")
+            return
+        api_key = os.environ.get("VT_API_KEY", "")
+        if api_key:
+            try:
+                req = urllib.request.Request(
+                    f"https://www.virustotal.com/api/v3/files/{h}",
+                    headers={"x-apikey": api_key},
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = j.loads(resp.read().decode())
+                stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+                mal = stats.get("malicious", 0)
+                sus = stats.get("suspicious", 0)
+                self._show_msg(f"VirusTotal: {mal} malicious, {sus} suspicious ({stats.get('undetected',0)} limpos)")
+            except Exception as e:
+                self._show_msg(f"VT API error: {e}")
+        else:
+            import webbrowser
+            webbrowser.open(f"https://www.virustotal.com/gui/file/{h}")
+            self._show_msg(f"Abrindo VirusTotal para hash {h[:16]}...")
 
     def _quarantine_restore(self, qid):
         ok, msg = self.quarantine.restore(qid)
@@ -2190,14 +3069,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _show_intrusion_popup(self, severity, msg, attack_type="", source_ip=""):
         title = "🚨 Ameaca Detectada!" if severity == "HIGH" else "⚠ Alerta de Seguranca"
         IntrusionPopup(title, msg, severity, source_ip, attack_type, self)
-        self.tray.showMessage(f"[{severity}] {attack_type or 'Intrusao'}", msg,
-                              QtWidgets.QSystemTrayIcon.Critical, 5000)
 
     def _on_rootkit_alert(self, level, msg):
+        self._show_msg(f"[ROOTKIT] {msg}", sound=True)
         item = QtWidgets.QListWidgetItem(f"[{level}] {msg}")
         item.setForeground(QtGui.QColor(RED if level == "HIGH" else YELLOW))
         self.alert_list.insertItem(0, item)
-        if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
         if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
 
     # Password Manager
@@ -2282,11 +3159,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_usb_scan(self, mount):
         self.scan_status.setText(f"USB mounted: {mount} - scanning...")
     def _on_usb_alert(self, level, msg):
+        self._show_msg(f"[USB] {msg}", sound=True)
         item = QtWidgets.QListWidgetItem(f"[USB][{level}] {msg}")
         color = RED if level == "HIGH" else (YELLOW if level == "MEDIUM" else TEXT)
         item.setForeground(QtGui.QColor(color))
         self.alert_list.insertItem(0, item)
-        if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
+        if level in ("HIGH", "MEDIUM"):
+            self._show_intrusion_popup(level, msg, "USB Threat", "")
         if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
 
     # VPN
@@ -2361,14 +3240,49 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.save_config()
         self._show_msg(f"Whitelist saved ({len(self.engine.whitelist)} entries)")
 
+    # ===================== AUTOSTART =====================
+    def _setup_autostart(self):
+        os.makedirs(os.path.dirname(self._autostart_path), exist_ok=True)
+        desktop = (
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=DefendR\n"
+            "Comment=DefendR Antivirus & Security Suite\n"
+            "Exec=/usr/local/bin/defendr-sudo.sh launch\n"
+            "Terminal=false\n"
+            "X-GNOME-Autostart-enabled=true\n"
+            "Categories=Security;\n"
+        )
+        with open(self._autostart_path, "w") as f:
+            f.write(desktop)
+
+    def _remove_autostart(self):
+        if os.path.exists(self._autostart_path):
+            os.remove(self._autostart_path)
+
+    def _toggle_autostart(self, enabled):
+        self.autostart_enabled = enabled
+        if enabled:
+            self._setup_autostart()
+        else:
+            self._remove_autostart()
+        self.engine.config_data["autostart"] = enabled
+        self.engine.save_config()
+
     # ===================== ENTERPRISE MODE =====================
     def _toggle_enterprise_mode(self, enabled):
         if enabled:
             self._activate_enterprise()
         else:
+            if not self._verify_enterprise_password():
+                self.enterprise_cb.setChecked(True)
+                return
             self._deactivate_enterprise()
 
     def _activate_enterprise(self):
+        if not self._ensure_enterprise_password():
+            self.enterprise_cb.setChecked(False)
+            return
         self.enterprise_mode = True
         self.engine.scan_level = "heavy"
         self.engine.protection_active = True
@@ -2439,6 +3353,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._show_msg("🔴 MODO EMPRESARIAL ATIVADO - Todas as protecoes em nivel maximo")
         self.sig_updater.update_signal.emit("EMPRESARIAL: Vigilancia total ativa")
 
+        # Force autostart on (locked)
+        self._setup_autostart()
+        self.autostart_cb.setChecked(True)
+        self.autostart_cb.setEnabled(False)
+        self.autostart_enabled = True
+
+        # Save state
+        self.engine.config_data["enterprise_mode"] = True
+        self.engine.save_config()
+
     def _deactivate_enterprise(self):
         self.enterprise_mode = False
 
@@ -2491,7 +3415,87 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tray.setToolTip("Protected by DefendR")
         self.engine.scan_level = "medium"
 
+        # Restore autostart to user preference
+        self.autostart_cb.setEnabled(True)
+        user_autostart = self.engine.config_data.get("autostart", False)
+        self.autostart_cb.setChecked(user_autostart)
+
         self._show_msg("Modo Individual restaurado - Protecao normal")
+
+    def _ensure_enterprise_password(self):
+        import hashlib
+        stored = self.engine.config_data.get("enterprise_password", "")
+        if stored:
+            return True
+        while True:
+            pwd, ok = QtWidgets.QInputDialog.getText(
+                self, "Definir Senha do Modo Empresarial",
+                "Crie uma senha forte (min 6 caracteres, 1 maiuscula, 1 numero, 1 especial):",
+                QtWidgets.QLineEdit.Password)
+            if not ok:
+                return False
+            if len(pwd) < 6:
+                QtWidgets.QMessageBox.warning(self, "Senha Fraca", "Minimo 6 caracteres.")
+                continue
+            if not any(c.isupper() for c in pwd):
+                QtWidgets.QMessageBox.warning(self, "Senha Fraca", "Precisa de pelo menos 1 letra maiuscula.")
+                continue
+            if not any(c.isdigit() for c in pwd):
+                QtWidgets.QMessageBox.warning(self, "Senha Fraca", "Precisa de pelo menos 1 numero.")
+                continue
+            if not any(c in "!@#$%&*()-_=+[]{};:,.<>?/~`" for c in pwd):
+                QtWidgets.QMessageBox.warning(self, "Senha Fraca", "Precisa de pelo menos 1 caractere especial (!@#$%&* etc).")
+                continue
+            pwd2, ok2 = QtWidgets.QInputDialog.getText(
+                self, "Confirmar Senha",
+                "Digite a senha novamente:",
+                QtWidgets.QLineEdit.Password)
+            if not ok2 or pwd != pwd2:
+                QtWidgets.QMessageBox.warning(self, "Erro", "As senhas nao conferem.")
+                continue
+            self.engine.config_data["enterprise_password"] = hashlib.sha256(pwd.encode()).hexdigest()
+            self.engine.save_config()
+            return True
+
+    def _verify_enterprise_password(self):
+        import hashlib, time
+        stored = self.engine.config_data.get("enterprise_password", "")
+        if not stored:
+            return True
+        now = time.time()
+        last_attempt = self.engine.config_data.get("enterprise_last_attempt", 0)
+        attempts = self.engine.config_data.get("enterprise_attempts", 0)
+        if attempts >= 3 and now - last_attempt < 300:
+            restante = int(300 - (now - last_attempt))
+            QtWidgets.QMessageBox.warning(
+                self, "BLOQUEADO",
+                f"Muitas tentativas incorretas. Aguarde {restante} segundos.")
+            return False
+        if now - last_attempt > 300:
+            attempts = 0
+        pwd, ok = QtWidgets.QInputDialog.getText(
+            self, "Desativar Modo Empresarial",
+            f"Digite a senha do Modo Empresarial para desativar ({3 - attempts} tentativas restantes):",
+            QtWidgets.QLineEdit.Password)
+        if not ok:
+            return False
+        if hashlib.sha256(pwd.encode()).hexdigest() == stored:
+            self.engine.config_data["enterprise_attempts"] = 0
+            self.engine.config_data["enterprise_last_attempt"] = 0
+            self.engine.save_config()
+            return True
+        self.engine.config_data["enterprise_attempts"] = attempts + 1
+        self.engine.config_data["enterprise_last_attempt"] = int(now)
+        self.engine.save_config()
+        if attempts + 1 >= 3:
+            QtWidgets.QMessageBox.warning(
+                self, "BLOQUEADO",
+                "Senha incorreta 3 vezes. Modo Empresarial bloqueado por 5 minutos.")
+        else:
+            QtWidgets.QMessageBox.warning(
+                self, "Senha incorreta",
+                f"Senha incorreta. {2 - attempts} tentativa(s) restante(s).")
+        return False
 
     def _run_enterprise_rootkit(self):
         try:
@@ -2503,8 +3507,41 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-    def _show_msg(self, msg):
-        self.tray.showMessage("DefendR", msg, QtWidgets.QSystemTrayIcon.Information, 3000)
+    def _show_msg(self, msg, sound=False):
+        self._notify_queue.append((msg, sound))
+        if not self._notify_timer.isActive():
+            self._notify_timer.start()
+
+    def _process_notify(self):
+        if not self._notify_queue:
+            self._notify_timer.stop()
+            return
+        msg, sound = self._notify_queue.pop(0)
+        if sound:
+            _play_alert_sound()
+
+        # Determine severity and icon from message
+        icon = "dialog-information"
+        urgency = "normal"
+        if sound or "HIGH" in msg.upper():
+            icon = "security-high"
+            urgency = "critical"
+        elif "[MEDIUM]" in msg.upper():
+            icon = "dialog-warning"
+            urgency = "normal"
+
+        try:
+            tag = msg.split("]")[0] + "]" if "]" in msg else ""
+            body = msg.split("]", 1)[1].strip() if "]" in msg else msg
+            summary = f"🛡 DefendR {tag}" if tag else "🛡 DefendR"
+            subprocess.Popen(["notify-send",
+                              f"--urgency={urgency}",
+                              f"--icon={icon}",
+                              f"--app-name=DefendR",
+                              summary, body],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
     # ===================== WEBCAM =====================
     def _toggle_webcam(self):
@@ -2518,25 +3555,27 @@ class MainWindow(QtWidgets.QMainWindow):
             self.wc_status.setText(_("Status: Active"))
 
     def _on_selfprotect_alert(self, severity, msg):
+        self._show_msg(f"[AUTO-DEFESA] {msg}", sound=True)
         self._show_intrusion_popup(severity, msg, "Auto-Defesa", "127.0.0.1")
 
     def _on_adv_alert(self, severity, msg):
+        self._show_msg(f"[AVANCADA] {msg}", sound=True)
         self._show_intrusion_popup(severity, msg, "Protecao Avancada", "127.0.0.1")
 
     def _on_webcam_alert(self, level, msg):
+        self._show_msg(f"[WEBCAM] {msg}", sound=True)
         item = QtWidgets.QListWidgetItem(f"[WEBCAM][{level}] {msg}")
         item.setForeground(QtGui.QColor(YELLOW))
         self.rt_alerts.insertItem(0, item)
         self.alert_list.insertItem(0, QtWidgets.QListWidgetItem(f"[WEBCAM] {msg}"))
         if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
-        if self.alert_list.count() > 100: self.alert_list.takeItem(self.alert_list.count()-1)
-    def _on_webcam_block(self, msg):
-        self.wc_list.addItem(msg)
+    def _on_webcam_block(self, name, pid):
+        self.wc_list.addItem(f"Blocked: {name} (PID {pid})")
     def _webcam_block_device(self):
-        ok, msg = self.webcam_protector.block_webcam()
+        msg = self.webcam_protector.block_webcam()
         self._show_msg(msg)
     def _webcam_unblock_device(self):
-        ok, msg = self.webcam_protector.unblock_webcam()
+        msg = self.webcam_protector.unblock_webcam()
         self._show_msg(msg)
 
     # ===================== WIFI =====================
