@@ -550,7 +550,7 @@ class NetworkMonitor(QtCore.QObject):
                         continue
                     if exe and any(exe.startswith(p) for p in SAFE_PATHS):
                         continue
-                    if name in SKIP_NAMES:
+                    if name in SKIP_NAMES or any(name.startswith(s) for s in SKIP_NAMES):
                         continue
                     if exe == "" or "memfd:" in exe.lower():
                         if pid not in self._fileless_alerted:

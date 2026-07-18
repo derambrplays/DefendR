@@ -4,7 +4,6 @@ import sys, os
 
 if __name__ == "__main__":
     if not os.environ.get("DISPLAY"):
-        print("DefendR requires a graphical display to run.")
-        sys.exit(1)
+        os.environ["DISPLAY"] = ":0"
     from defendr import main
     main()
