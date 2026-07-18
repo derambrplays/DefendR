@@ -754,8 +754,12 @@ class InstallPage(QtWidgets.QWizardPage):
                 dst = os.path.expanduser(f"~/.local/share/icons/hicolor/{size}x{size}/apps/defendr.png")
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 if os.path.exists(svg_src):
-                    subprocess.run(["convert", "-background", "none", "-resize", f"{size}x{size}", svg_src, dst],
-                                   capture_output=True, timeout=30)
+                    if shutil.which("rsvg-convert"):
+                        subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), svg_src, "-o", dst],
+                                       capture_output=True, timeout=30)
+                    else:
+                        subprocess.run(["convert", "-background", "none", "-resize", f"{size}x{size}", svg_src, dst],
+                                       capture_output=True, timeout=30)
                 elif os.path.exists(splash_src):
                     subprocess.run(["convert", splash_src, "-resize", f"{size}x{size}", dst],
                                    capture_output=True, timeout=30)

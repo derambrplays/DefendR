@@ -1,19 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <defs>
-    <linearGradient id="bg" x1="0.4" y1="0" x2="0.6" y2="1">
-      <stop offset="0%" stop-color="#9b59ff"/>
-      <stop offset="60%" stop-color="#7c3aed"/>
-      <stop offset="100%" stop-color="#5b21b6"/>
-    </linearGradient>
-  </defs>
   <!-- Shield shape -->
   <path d="M128 16 L40 60 L40 120 Q40 180 128 240 Q216 180 216 120 L216 60 Z"
-        fill="url(#bg)" stroke="#c084fc" stroke-width="4"/>
+        fill="#7c3aed" stroke="#9b59ff" stroke-width="4"/>
   <!-- D letter -->
   <text x="128" y="160" text-anchor="middle"
         font-family="Arial,Helvetica,sans-serif" font-weight="bold"
         font-size="110" fill="white">D</text>
-  <!-- Inner shield highlight -->
-  <path d="M128 30 L52 68 L52 120 Q52 172 128 226 Q204 172 204 120 L204 68 Z"
-        fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="2"/>
 </svg>

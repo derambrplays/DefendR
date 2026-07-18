@@ -520,9 +520,23 @@ class NetworkMonitor(QtCore.QObject):
             pass
 
     def _check_fileless_malware(self):
+        SKIP_NAMES = frozenset({
+            "systemd", "systemd-userwork", "systemd-logind", "systemd-journald",
+            "systemd-resolved", "systemd-timesyncd", "systemd-udevd", "systemd-networkd",
+            "dnsmasq", "lightdm", "gdm", "sddm", "wdm", "lightdm-session",
+            "accounts-daemon", "dbus", "dbus-daemon", "polkitd",
+            "rtkit-daemon", "colord", "upowerd", "udisksd",
+            "NetworkManager", "ModemManager", "cupsd", "cups-browsed",
+            "avahi-daemon", "bluetoothd", "wpa_supplicant",
+            "haveged", "irqbalance", "thermald",
+        })
+        SAFE_PATHS = frozenset({
+            "/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/",
+            "/usr/lib/", "/lib/", "/lib64/", "/etc/",
+        })
         try:
             import psutil
-            for proc in psutil.process_iter(["pid", "name", "exe", "cmdline", "memory_maps"]):
+            for proc in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
                 try:
                     pid = proc.info["pid"]
                     name = proc.info["name"] or "?"
@@ -534,7 +548,11 @@ class NetworkMonitor(QtCore.QObject):
                         continue
                     if exe == "" and cmdline == "":
                         continue
-                    if "memfd:" in exe.lower() or "(deleted)" in exe.lower() or exe == "":
+                    if exe and any(exe.startswith(p) for p in SAFE_PATHS):
+                        continue
+                    if name in SKIP_NAMES:
+                        continue
+                    if exe == "" or "memfd:" in exe.lower():
                         if pid not in self._fileless_alerted:
                             self._fileless_alerted.add(pid)
                             self.alert_signal.emit("HIGH",
